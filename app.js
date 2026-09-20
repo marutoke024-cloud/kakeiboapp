@@ -36,14 +36,22 @@ function loadEntries() {
     if (!raw) return [];
     const data = JSON.parse(raw);
     if (!Array.isArray(data.entries)) return [];
-    return data.entries.filter(e =>
-      e && typeof e.a === 'number' && e.a > 0 && CAT_NAME[e.c] && /^\d{4}-\d{2}-\d{2}$/.test(e.d));
+    return data.entries
+      .filter(e => e && typeof e.a === 'number' && e.a > 0 && CAT_NAME[e.c] && /^\d{4}-\d{2}-\d{2}$/.test(e.d))
+      .map(e => ({ id: e.id, d: e.d, c: e.c, a: e.a, n: cleanNote(e.n) }));
   } catch (_) { return []; }
 }
 function saveEntries(list) {
   try { localStorage.setItem(STORE_KEY, JSON.stringify({ entries: list })); return true; }
   catch (_) { return false; }
 }
+
+/* 「なにに使ったか」の短い名前をそろえる */
+function cleanNote(v) {
+  return String(v == null ? '' : v).replace(/[\r\n\t]+/g, ' ').trim().slice(0, 20);
+}
+const escapeHtml = t => String(t).replace(/[&<>"']/g,
+  ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 
 let entries = loadEntries();
 
@@ -105,7 +113,7 @@ const PAST_LABEL_COLOR = '#245C82';
 const RING = { prevR:47.5, prevW:3.2, curR:40, curW:8.6, gap:1.6, hole:0.714 };
 
 let lastCur = {}, lastPrev = {}, lastIsPast = false, lastMids = [];
-let selectedCat = null, selectTimer = null, donutS = 0;
+let donutS = 0;
 
 function ringInto(g, r, w, totals, opacity) {
   const sum = CATS.reduce((a, c) => a + (totals[c.key] || 0), 0);
@@ -147,21 +155,9 @@ function drawRings(cur, prev) {
 
 /* まんなかの文字 */
 function paintCenter() {
-  const m = monthNum(viewYM), pm = monthNum(addMonths(viewYM, -1));
   const tag = lastIsPast ? '<span class="past-tag">過去の記録</span>' : '';
-  let big, cls = '', sub = '';
-  if (selectedCat) {
-    const a = lastCur[selectedCat] || 0, b = lastPrev[selectedCat] || 0;
-    el.totalLabel.innerHTML = `${m}月の${CAT_NAME[selectedCat]}${tag}`;
-    if (a > 0) big = `${fmt(a)}<small>円</small>`;
-    else { big = 'まだありません'; cls = ' none'; }
-    sub = b > 0 ? `${pm}月は${fmt(b)}円` : `${pm}月もありません`;
-  } else {
-    el.totalLabel.innerHTML = `${m}月支出合計${tag}`;
-    big = `${fmt(sumOf(lastCur))}<small>円</small>`;
-  }
-  el.donutCenter.innerHTML =
-    `<span class="dc-big${cls}">${big}</span>` + (sub ? `<span class="dc-sub">${sub}</span>` : '');
+  el.totalLabel.innerHTML = `${monthNum(viewYM)}月支出合計${tag}`;
+  el.donutCenter.innerHTML = `<span class="dc-big">${fmt(sumOf(lastCur))}<small>円</small></span>`;
   fitCenter();
 }
 
@@ -174,17 +170,6 @@ function fitCenter() {
   big.style.transform = 'scale(1)';
   const w = big.scrollWidth;
   if (w > hole) big.style.transform = `scale(${(hole / w).toFixed(3)})`;
-}
-
-/* 選んだカテゴリだけをはっきりさせる */
-function applyDim() {
-  document.querySelectorAll('#ring .slice').forEach(sl => {
-    const base = sl.parentNode.id === 'ringPrev' ? .4 : 1;
-    sl.setAttribute('opacity',
-      selectedCat && sl.dataset.cat !== selectedCat ? (base * .25).toFixed(2) : base);
-  });
-  el.donutLabels.querySelectorAll('.dlabel').forEach(n =>
-    n.classList.toggle('dim', !!selectedCat && n.dataset.cat !== selectedCat));
 }
 
 /* 輪の大きさと位置、まわりのカテゴリ名の置き場所を決める */
@@ -243,7 +228,6 @@ function layoutDonut() {
   for (const o of placed) { o.n.style.left = o.x + 'px'; o.n.style.top = o.y + 'px'; }
 
   fitCenter();
-  applyDim();
 }
 
 /* キャラクターを、まわりのボタンや文字に当たらないぎりぎりまで大きくする */
@@ -268,19 +252,38 @@ function layoutChars() {
   if (w > 60) img.style.width = Math.round(w) + 'px';
 }
 
+/* カテゴリを押したら、その月の内訳をひらく */
 function selectCat(key) {
-  clearTimeout(selectTimer);
-  selectedCat = selectedCat === key ? null : key;
-  paintCenter();
-  applyDim();
-  if (selectedCat) selectTimer = setTimeout(clearSelect, 6000);  // 見終わったら自動でもどす
+  if (!CAT_NAME[key]) return;
+  openBreakdown(key);
 }
-function clearSelect() {
-  clearTimeout(selectTimer);
-  if (!selectedCat) return;
-  selectedCat = null;
-  paintCenter();
-  applyDim();
+function clearSelect() { /* いまは何もしない（押したら内訳がひらきます） */ }
+
+function openBreakdown(cat) {
+  const ym = viewYM, pm = addMonths(ym, -1);
+  const rows = entries
+    .map((e, i) => ({ e, i }))
+    .filter(o => ymOf(o.e.d) === ym && o.e.c === cat)
+    .sort((a, b) => (a.e.d < b.e.d ? 1 : a.e.d > b.e.d ? -1 : b.i - a.i))
+    .map(o => o.e);
+  const total = rows.reduce((sum, e) => sum + e.a, 0);
+  const prev = totalsOf(pm)[cat] || 0;
+  const color = lastIsPast ? PAST_LABEL_COLOR : CAT_COLOR[cat].text;
+
+  openSheet(`
+    <h2 style="color:${color}">${monthNum(ym)}月の${CAT_NAME[cat]}</h2>
+    <div class="bd-total">${fmt(total)}<small>円</small></div>
+    <p class="bd-prev">${prev > 0
+      ? `${monthNum(pm)}月は ${fmt(prev)}円`
+      : `${monthNum(pm)}月は ありません`}</p>
+    ${rows.length ? `<div class="bd-list">${rows.map(e => `
+      <div class="bd-row">
+        <span class="bd-day">${Number(e.d.slice(5, 7))}/${Number(e.d.slice(8, 10))}</span>
+        <span class="bd-name">${escapeHtml(e.n || CAT_NAME[e.c])}</span>
+        <span class="bd-amt">${fmt(e.a)}<small>円</small></span>
+      </div>`).join('')}</div>` : '<p class="bd-prev">まだありません</p>'}
+    <button type="button" class="btn-wide" data-act="close">とじる</button>
+  `);
 }
 
 /* 輪のどこを押したかを、中心からの向きで決める。
@@ -317,8 +320,6 @@ function render() {
   lastCur  = totalsOf(viewYM);
   lastPrev = totalsOf(addMonths(viewYM, -1));
   lastIsPast = isPast;
-  selectedCat = null;
-  clearTimeout(selectTimer);
 
   document.body.classList.toggle('is-past', isPast);
   el.app.classList.toggle('past', isPast);
@@ -455,7 +456,7 @@ function openCategory(amount, selected) {
 }
 
 /* ---------------- 保存まえの確認 ---------------- */
-function openConfirm(amount, cat, onRedo) {
+function openConfirm(amount, cat, onRedo, note) {
   sheetOnClose = null;
   el.sheet.hidden = true; el.sheet.innerHTML = '';
   el.scrim.hidden = false;
@@ -463,6 +464,7 @@ function openConfirm(amount, cat, onRedo) {
     <div class="confirm-q">これでよろしいですか？</div>
     <div class="confirm-big">${fmt(amount)}<small>円</small></div>
     <div class="confirm-cat">${CAT_NAME[cat]}</div>
+    ${note ? `<div class="confirm-note">${escapeHtml(note)}</div>` : ''}
     <div class="confirm-btns">
       <button type="button" class="btn-ok"   id="cfOk">これでOK</button>
       <button type="button" class="btn-redo" id="cfNg">やり直す</button>
@@ -470,16 +472,16 @@ function openConfirm(amount, cat, onRedo) {
   el.confirm.hidden = false;
   setKeyboardOffset(0);
 
-  $('cfOk').addEventListener('click', () => { closeAll(); addEntry(amount, cat); });
+  $('cfOk').addEventListener('click', () => { closeAll(); addEntry(amount, cat, note); });
   $('cfNg').addEventListener('click', () => {
     el.confirm.hidden = true; el.confirm.innerHTML = '';
     if (onRedo) onRedo(); else openAddMenu();
   });
 }
 
-function addEntry(amount, cat) {
+function addEntry(amount, cat, note) {
   entries.push({ id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
-                 d: todayISO(), c: cat, a: amount });
+                 d: todayISO(), c: cat, a: amount, n: cleanNote(note) });
   if (!saveEntries(entries)) {
     entries.pop();
     showToast('保存できませんでした', 'もう一度おためしください', 2600);
@@ -488,7 +490,8 @@ function addEntry(amount, cat) {
   refreshCurrentMonth();
   viewYM = currentYM;
   render();
-  showToast('保存しました', `${CAT_NAME[cat]} ${fmt(amount)}円`, 1900);
+  const n = cleanNote(note);
+  showToast('保存しました', `${n || CAT_NAME[cat]} ${fmt(amount)}円`, 1900);
 }
 
 /* ---------------- さいごの入力を消す ---------------- */
@@ -566,7 +569,7 @@ function openVoice() {
     recog = null;
     const parsed = parseSpeech(finalText);
     if (!parsed.amount) { openVoiceRetry('金額が聞き取れませんでした。'); return; }
-    openConfirm(parsed.amount, parsed.cat, openVoice);
+    openConfirm(parsed.amount, parsed.cat, openVoice, parsed.note);
   };
   try { recog.start(); } catch (_) { recog = null; openVoiceUnavailable(); }
 }
@@ -614,12 +617,21 @@ function parseSpeech(text) {
   else if (/ガス|がす/.test(s))                                     cat = 'gas';
 
   // カテゴリ名にふくまれる漢数字を金額と取りちがえないよう、先に消す
-  const cleaned = s.replace(/携帯電話|携帯|ケータイ|けいたい|スマホ|スマートフォン|電話|水道|すいどう|電気|でんき|ガス|がす|生活費|食費/g, '');
+  const cleaned = s.replace(
+    /(?:携帯電話|携帯|ケータイ|けいたい|スマホ|スマートフォン|電話|水道|すいどう|電気|でんき|ガス|がす|生活費|食費)(?:代|料金|りょうきん)?/g, '');
   let amount = 0;
   for (const chunk of cleaned.match(/[0-9〇零一壱二弐三参四五六七八九十百千万億]+/g) || []) {
     amount = Math.max(amount, toNumber(chunk));
   }
-  return { amount: amount > 0 && amount < 1e9 ? amount : 0, cat };
+  // 金額とカテゴリ名をのぞいた言葉を「なにに使ったか」として残す
+  const note = cleaned
+    .replace(/[0-9〇零一壱二弐三参四五六七八九十百千万億]+/g, '')
+    .replace(/円|えん/g, '')
+    .replace(/(?:です|でした|だよ)\s*$/, '')
+    .replace(/^[でをにのへとがはも、。・\s]+/, '')
+    .replace(/[でをにのへとがはも、。・\s]+$/, '')
+    .slice(0, 12);
+  return { amount: amount > 0 && amount < 1e9 ? amount : 0, cat, note };
 }
 
 const KANJI_DIGIT = { '〇':0,'零':0,'一':1,'壱':1,'二':2,'弐':2,'三':3,'参':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9 };
@@ -712,6 +724,9 @@ const RECEIPT_PROMPT = [
   '・種類は次から選びます。',
   '  life = 生活費（食品・日用品・薬・衣類など、下のどれにも当てはまらない買い物すべて）',
   '  water = 水道代 / power = 電気代 / gas = ガス代 / phone = 携帯電話や通信の料金',
+  '・あとで何に使ったか分かるように、短い名前を detail に入れます（10文字以内の日本語）。',
+  '  飲食店なら主な料理（例：ランチ カレーライス）、お店での買い物なら店の名前（例：スギ薬局）、',
+  '  公共料金なら会社やサービスの名前。分からなければ空にします。',
   '・レシートでも請求書でもない、または金額が読み取れないときは found を false にします。',
 ].join('\n');
 
@@ -721,8 +736,9 @@ const RECEIPT_SCHEMA = {
     found:    { type: 'BOOLEAN' },
     amount:   { type: 'INTEGER' },
     category: { type: 'STRING', enum: ['life', 'water', 'power', 'gas', 'phone'] },
+    detail:   { type: 'STRING' },
   },
-  required: ['found', 'amount', 'category'],
+  required: ['found', 'amount', 'category', 'detail'],
 };
 
 async function askGemini(key, model, b64) {
@@ -826,7 +842,7 @@ async function runOcr(file) {
       openOcrFailed();
       return;
     }
-    openConfirm(amount, cat, openCamera);
+    openConfirm(amount, cat, openCamera, cleanNote(out.detail));
   } catch (err) {
     if (runId !== ocrRunId) return;
     const st = err && err.status;
