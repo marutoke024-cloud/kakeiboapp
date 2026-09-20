@@ -81,45 +81,230 @@ let viewYM    = currentYM;  // 表示している月
 
 const $ = id => document.getElementById(id);
 const el = {
-  app: $('app'), chart: $('chart'), totalLabel: $('totalLabel'), totalYen: $('totalYen'),
+  app: $('app'), totalLabel: $('totalLabel'),
   legendCur: $('legendCur'), legendPrev: $('legendPrev'),
+  donut: $('donut'), donutCenter: $('donutCenter'), donutLabels: $('donutLabels'), noData: $('noData'),
   btnPrev: $('btnPrev'), btnNow: $('btnNow'), btnAdd: $('btnAdd'), btnShare: $('btnShare'),
   viewOnly: $('viewOnly'), scrim: $('scrim'), sheet: $('sheet'),
   confirm: $('confirm'), toast: $('toast'),
 };
 
+/* ---------------- 円グラフ（ドーナツ） ---------------- */
+/* カテゴリごとの色。arc は輪の色、text は文字の色（背景とのコントラストを上げた濃いめ） */
+const CAT_COLOR = {
+  life : { arc:'#6CB33F', text:'#3E7A25' },
+  water: { arc:'#46A3DC', text:'#1A6A9E' },
+  power: { arc:'#F2B134', text:'#946600' },
+  gas  : { arc:'#F07C3C', text:'#B9521B' },
+  phone: { arc:'#E85C93', text:'#B62A62' },
+};
+const PAST_LABEL_COLOR = '#245C82';
+
+/* 輪の寸法（viewBox 100×100 のなかでの値） */
+const RING = { prevR:47.5, prevW:3.2, curR:40, curW:8.6, gap:1.6, hole:0.714 };
+
+let lastCur = {}, lastPrev = {}, lastIsPast = false, lastMids = [];
+let selectedCat = null, selectTimer = null, donutS = 0;
+
+function ringInto(g, r, w, totals, opacity) {
+  const sum = CATS.reduce((a, c) => a + (totals[c.key] || 0), 0);
+  const C = 2 * Math.PI * r;
+  if (sum <= 0) {
+    g.insertAdjacentHTML('beforeend',
+      `<circle cx="50" cy="50" r="${r}" fill="none" stroke="#E8DDCB" stroke-width="${w}" opacity="${opacity}"/>`);
+    return [];
+  }
+  const list = CATS.filter(c => totals[c.key] > 0);
+  const gap = list.length > 1 ? RING.gap : 0;
+  let off = 0;
+  const mids = [];
+  for (const c of list) {
+    const frac = totals[c.key] / sum;
+    const len = Math.max(0.6, frac * C - gap);
+    g.insertAdjacentHTML('beforeend',
+      `<circle class="slice" data-cat="${c.key}" cx="50" cy="50" r="${r}" fill="none"` +
+      ` stroke="${CAT_COLOR[c.key].arc}" stroke-width="${w}" stroke-linecap="butt" opacity="${opacity}"` +
+      ` stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}"` +
+      ` stroke-dashoffset="${(-(off + gap / 2)).toFixed(2)}"/>`);
+    mids.push({
+      key: c.key,
+      angle: (off + frac * C / 2) / C * 360 - 90,
+      start: off / C * 360 - 90,
+      end: (off + frac * C) / C * 360 - 90,
+    });
+    off += frac * C;
+  }
+  return mids;
+}
+
+function drawRings(cur, prev) {
+  const gPrev = $('ringPrev'), gCur = $('ringCur');
+  gPrev.innerHTML = ''; gCur.innerHTML = '';
+  ringInto(gPrev, RING.prevR, RING.prevW, prev, .4);   // 細い外側＝1か月前
+  return ringInto(gCur, RING.curR, RING.curW, cur, 1); // 太い内側＝表示中の月
+}
+
+/* まんなかの文字 */
+function paintCenter() {
+  const m = monthNum(viewYM), pm = monthNum(addMonths(viewYM, -1));
+  const tag = lastIsPast ? '<span class="past-tag">過去の記録</span>' : '';
+  let big, cls = '', sub = '';
+  if (selectedCat) {
+    const a = lastCur[selectedCat] || 0, b = lastPrev[selectedCat] || 0;
+    el.totalLabel.innerHTML = `${m}月の${CAT_NAME[selectedCat]}${tag}`;
+    if (a > 0) big = `${fmt(a)}<small>円</small>`;
+    else { big = 'まだありません'; cls = ' none'; }
+    sub = b > 0 ? `${pm}月は${fmt(b)}円` : `${pm}月もありません`;
+  } else {
+    el.totalLabel.innerHTML = `${m}月支出合計${tag}`;
+    big = `${fmt(sumOf(lastCur))}<small>円</small>`;
+  }
+  el.donutCenter.innerHTML =
+    `<span class="dc-big${cls}">${big}</span>` + (sub ? `<span class="dc-sub">${sub}</span>` : '');
+  fitCenter();
+}
+
+/* まんなかの文字が輪の内側からはみ出さないようにする */
+function fitCenter() {
+  const big = el.donutCenter.querySelector('.dc-big');
+  if (!big || !donutS) return;
+  const hole = donutS * RING.hole - 10;
+  el.donutCenter.style.width = hole + 'px';
+  big.style.transform = 'scale(1)';
+  const w = big.scrollWidth;
+  if (w > hole) big.style.transform = `scale(${(hole / w).toFixed(3)})`;
+}
+
+/* 入力がまだないカテゴリ */
+function renderNoData(cur) {
+  const empty = CATS.filter(c => !(cur[c.key] > 0));
+  if (!empty.length) { el.noData.hidden = true; el.noData.innerHTML = ''; return; }
+  el.noData.hidden = false;
+  el.noData.innerHTML = 'まだありません：' +
+    empty.map(c => `<button type="button" class="nochip" data-cat="${c.key}">${c.name}</button>`).join('');
+}
+
+/* 選んだカテゴリだけをはっきりさせる */
+function applyDim() {
+  document.querySelectorAll('#ring .slice').forEach(sl => {
+    const base = sl.parentNode.id === 'ringPrev' ? .4 : 1;
+    sl.setAttribute('opacity',
+      selectedCat && sl.dataset.cat !== selectedCat ? (base * .25).toFixed(2) : base);
+  });
+  el.donutLabels.querySelectorAll('.dlabel').forEach(n =>
+    n.classList.toggle('dim', !!selectedCat && n.dataset.cat !== selectedCat));
+  el.noData.querySelectorAll('.nochip').forEach(n =>
+    n.classList.toggle('dim', !!selectedCat && n.dataset.cat !== selectedCat));
+}
+
+/* 輪の大きさと、まわりのカテゴリ名の位置を決める */
+function layoutDonut() {
+  const box = el.donut.getBoundingClientRect();
+  if (!box.width || !box.height) return;
+  const S = Math.max(140, Math.min(box.width - 30, box.height - 18));
+  donutS = S;
+  const svg = $('ring');
+  svg.setAttribute('width', S);
+  svg.setAttribute('height', S);
+
+  el.donutLabels.innerHTML = lastMids.map(o =>
+    `<span class="dlabel" data-cat="${o.key}" style="color:${lastIsPast ? PAST_LABEL_COLOR : CAT_COLOR[o.key].text}">${CAT_NAME[o.key]}</span>`
+  ).join('');
+
+  const cx = box.width / 2, cy = box.height / 2;
+  const R = (RING.prevR + RING.prevW / 2 + 5) / 100 * S;   // 輪のすぐ外がわ
+  const placed = [...el.donutLabels.children].map((n, i) => {
+    const a = lastMids[i].angle * Math.PI / 180;
+    const w = n.offsetWidth, h = n.offsetHeight;
+    const co = Math.cos(a), si = Math.sin(a);
+    // 輪の外へ逃がす置きかた（真上・真下では中央ぞろえ、左右では外ぞろえになる）
+    const x = cx + co * (R + w / 2) - w / 2;
+    const y = cy + si * (R + h / 2) - h / 2;
+    return {
+      n, w, h, right: co >= 0,
+      x: Math.min(Math.max(2, x), Math.max(2, box.width - w - 2)),
+      y: Math.min(Math.max(0, y), Math.max(0, box.height - h)),
+    };
+  });
+  for (const side of [true, false]) {          // 左右それぞれで重なりをほどく
+    const g = placed.filter(o => o.right === side).sort((p, q) => p.y - q.y);
+    for (let i = 1; i < g.length; i++) {
+      const min = g[i - 1].y + g[i - 1].h + 4;
+      if (g[i].y < min) g[i].y = min;
+    }
+    if (g.length) {
+      const over = g[g.length - 1].y + g[g.length - 1].h - box.height;
+      if (over > 0) for (const o of g) o.y = Math.max(0, o.y - over);
+    }
+  }
+  for (const o of placed) { o.n.style.left = o.x + 'px'; o.n.style.top = o.y + 'px'; }
+
+  fitCenter();
+  applyDim();
+}
+
+function selectCat(key) {
+  clearTimeout(selectTimer);
+  selectedCat = selectedCat === key ? null : key;
+  paintCenter();
+  applyDim();
+  if (selectedCat) selectTimer = setTimeout(clearSelect, 6000);  // 見終わったら自動でもどす
+}
+function clearSelect() {
+  clearTimeout(selectTimer);
+  if (!selectedCat) return;
+  selectedCat = null;
+  paintCenter();
+  applyDim();
+}
+
+/* 輪のどこを押したかを、中心からの向きで決める。
+   （スライスの図形そのものを当たり判定に使うとブラウザによって差が出るため） */
+function onDonutTap(ev) {
+  const label = ev.target.closest && ev.target.closest('.dlabel');
+  if (label) { selectCat(label.dataset.cat); return; }
+  if (!lastMids.length) { clearSelect(); return; }
+
+  const svg = $('ring').getBoundingClientRect();
+  if (!svg.width) return;
+  const S = svg.width;
+  const dx = ev.clientX - (svg.left + S / 2);
+  const dy = ev.clientY - (svg.top + S / 2);
+  const dist = Math.hypot(dx, dy) / S * 100;              // viewBox の単位に直す
+  const inner = RING.curR - RING.curW / 2 - 1;            // 穴のふち
+  const outer = RING.prevR + RING.prevW / 2 + 3;          // いちばん外がわ
+  if (dist < inner || dist > outer) { clearSelect(); return; }
+
+  let deg = Math.atan2(dy, dx) * 180 / Math.PI;           // 0度＝3時、-90度＝12時
+  const base = lastMids[0].start;
+  const rel = ((deg - base) % 360 + 360) % 360;
+  for (const m of lastMids) {
+    const a = ((m.start - base) % 360 + 360) % 360;
+    const b = a + (m.end - m.start);
+    if (rel >= a && rel < b) { selectCat(m.key); return; }
+  }
+  selectCat(lastMids[lastMids.length - 1].key);
+}
+
 /* ---------------- 画面を描く ---------------- */
 function render() {
   const isPast = viewYM !== currentYM;
-  const cur  = totalsOf(viewYM);
-  const prev = totalsOf(addMonths(viewYM, -1));
-  const m    = monthNum(viewYM);
-  const pm   = monthNum(addMonths(viewYM, -1));
+  lastCur  = totalsOf(viewYM);
+  lastPrev = totalsOf(addMonths(viewYM, -1));
+  lastIsPast = isPast;
+  selectedCat = null;
+  clearTimeout(selectTimer);
 
   document.body.classList.toggle('is-past', isPast);
   el.app.classList.toggle('past', isPast);
+  el.legendCur.textContent  = monthNum(viewYM) + '月';
+  el.legendPrev.textContent = monthNum(addMonths(viewYM, -1)) + '月';
 
-  el.totalLabel.innerHTML =
-    `${m}月支出合計` + (isPast ? '<span class="past-tag">過去の記録</span>' : '');
-  el.totalYen.textContent = fmt(sumOf(cur));
-  el.legendCur.textContent  = `${m}月`;
-  el.legendPrev.textContent = `${pm}月`;
-
-  const max = Math.max(1, ...CATS.map(c => Math.max(cur[c.key], prev[c.key])));
-  el.chart.innerHTML = CATS.map(c => {
-    const a = cur[c.key], b = prev[c.key];
-    const right = a > 0
-      ? `<span class="cat-amt">${fmt(a)}<small>円</small></span>`
-      : `<span class="cat-none">まだありません</span>`;
-    let bars = '';
-    if (a > 0) bars += `<div class="bar" style="width:${Math.max(5, a / max * 100)}%"></div>`;
-    if (b > 0) bars += `<div class="bar prev" style="width:${Math.max(5, b / max * 100)}%"></div>`;
-    if (!bars) bars = `<div class="bar" style="width:0;visibility:hidden"></div>`;
-    return `<div class="cat">
-        <div class="cat-top"><span class="cat-name">${SVG[c.key]}${c.name}</span>${right}</div>
-        <div class="bars">${bars}</div>
-      </div>`;
-  }).join('');
+  lastMids = drawRings(lastCur, lastPrev);
+  renderNoData(lastCur);
+  paintCenter();
+  layoutDonut();
+  requestAnimationFrame(layoutDonut);   // 文字の幅が確定してからもう一度ととのえる
 
   el.btnPrev.disabled = !prevMonthWithData(viewYM);
   el.btnNow.classList.toggle('hide', !isPast);
@@ -470,16 +655,14 @@ function drawFooter(x, W, H) {
   x.fillText('かけい簿', 56, H - 54);
 }
 
-/* 1枚目：今月の記録 */
+/* 1枚目：今月の記録（画面と同じドーナツ＋金額の一覧） */
 function drawMonthImage(ym) {
   const W = 1080, PAD = 56;
   const t = totalsOf(ym), total = sumOf(t);
-  const max = Math.max(1, ...CATS.map(c => t[c.key]));
-  const rowH = 132, H = 520 + rowH * CATS.length + 300;
+  const rowH = 96, H = 820 + rowH * CATS.length + 250;
   const { c, x } = newCanvas(W, H);
   const d = new Date();
-  const isThis = ym === thisYM();
-  const upto = isThis ? `${monthNum(ym)}月${d.getDate()}日まで` : `${monthNum(ym)}月ぜんぶ`;
+  const upto = ym === thisYM() ? `${monthNum(ym)}月${d.getDate()}日まで` : `${monthNum(ym)}月ぜんぶ`;
 
   x.textAlign = 'left';
   setFont(x, 78, 900); x.fillStyle = INK;
@@ -487,23 +670,44 @@ function drawMonthImage(ym) {
   setFont(x, 46, 800); x.fillStyle = INK2;
   x.fillText(upto, PAD, 214);
 
-  x.fillStyle = '#FFFFFF'; roundRect(x, PAD, 258, W - PAD * 2, 210, 28); x.fill();
-  x.strokeStyle = '#E7D9C5'; x.lineWidth = 4; x.stroke();
-  setFont(x, 46, 800); x.fillStyle = INK2; x.fillText('支出合計', PAD + 40, 330);
-  setFont(x, 116, 900); x.fillStyle = INK; x.textAlign = 'right';
-  x.fillText(`${fmt(total)}円`, W - PAD - 40, 430);
+  // ドーナツ
+  const cx = W / 2, cy = 520, R = 232, LW = 76;
+  x.lineCap = 'butt';
+  x.lineWidth = LW;
+  x.strokeStyle = '#EFE4D3';
+  x.beginPath(); x.arc(cx, cy, R - LW / 2, 0, Math.PI * 2); x.stroke();
+  if (total > 0) {
+    const list = CATS.filter(k => t[k.key] > 0);
+    const gap = list.length > 1 ? 0.028 : 0;
+    let a0 = -Math.PI / 2;
+    for (const k of list) {
+      const sweep = t[k.key] / total * Math.PI * 2;
+      x.strokeStyle = CAT_COLOR[k.key].arc;
+      x.beginPath();
+      x.arc(cx, cy, R - LW / 2, a0 + gap / 2, a0 + sweep - gap / 2);
+      x.stroke();
+      a0 += sweep;
+    }
+  }
+  x.textAlign = 'center';
+  setFont(x, 46, 800); x.fillStyle = INK2; x.fillText('支出合計', cx, cy - 34);
+  const money = `${fmt(total)}円`, holeW = (R - LW) * 2 - 18;
+  let f = 82;
+  setFont(x, f, 900);
+  while (f > 44 && x.measureText(money).width > holeW) { f -= 2; setFont(x, f, 900); }
+  x.fillStyle = INK; x.fillText(money, cx, cy + 20 + f / 2.6);
 
-  let y = 520;
+  // カテゴリごとの金額
+  let y = 820;
   for (const cat of CATS) {
     const v = t[cat.key];
-    x.textAlign = 'left'; setFont(x, 54, 900); x.fillStyle = INK;
-    x.fillText(cat.name, PAD, y + 48);
+    x.beginPath(); x.arc(PAD + 18, y + 26, 18, 0, Math.PI * 2);
+    x.fillStyle = v > 0 ? CAT_COLOR[cat.key].arc : '#D9CBB8'; x.fill();
+    x.textAlign = 'left'; setFont(x, 54, 900); x.fillStyle = v > 0 ? INK : '#9C8977';
+    x.fillText(cat.name, PAD + 54, y + 44);
     x.textAlign = 'right';
-    if (v > 0) { setFont(x, 54, 900); x.fillStyle = INK; x.fillText(`${fmt(v)}円`, W - PAD, y + 48); }
-    else       { setFont(x, 44, 800); x.fillStyle = '#9C8977'; x.fillText('まだありません', W - PAD, y + 46); }
-    const track = W - PAD * 2;
-    x.fillStyle = '#EFE4D3'; roundRect(x, PAD, y + 72, track, 34, 17); x.fill();
-    if (v > 0) { x.fillStyle = BAR_CUR; roundRect(x, PAD, y + 72, Math.max(34, track * v / max), 34, 17); x.fill(); }
+    if (v > 0) { setFont(x, 54, 900); x.fillStyle = INK; x.fillText(`${fmt(v)}円`, W - PAD, y + 44); }
+    else       { setFont(x, 44, 800); x.fillStyle = '#9C8977'; x.fillText('まだありません', W - PAD, y + 42); }
     y += rowH;
   }
   drawFooter(x, W, H);
@@ -683,13 +887,23 @@ function init() {
   el.scrim.addEventListener('click', () => { stopVoice(); closeAll(); });
   el.sheet.addEventListener('click', onTap);
 
+  // 円グラフをタップすると、そのカテゴリの金額をまんなかに出す
+  el.donut.addEventListener('click', onDonutTap);
+  el.noData.addEventListener('click', ev => {
+    const n = ev.target.closest('.nochip');
+    if (n) selectCat(n.dataset.cat);
+  });
+
   // 月がかわったら自動でいれかえる
   setInterval(refreshCurrentMonth, 60000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshCurrentMonth(); });
   window.addEventListener('focus', refreshCurrentMonth);
 
-  window.addEventListener('orientationchange', () => setTimeout(lockAppHeight, 350));
-  window.addEventListener('resize', () => { if (!window.visualViewport) lockAppHeight(); });
+  window.addEventListener('orientationchange', () => setTimeout(() => { lockAppHeight(); layoutDonut(); }, 350));
+  window.addEventListener('resize', () => {
+    if (!window.visualViewport) lockAppHeight();
+    requestAnimationFrame(layoutDonut);
+  });
 
   // 二本指の拡大や、ダブルタップでの拡大を止める
   document.addEventListener('gesturestart', e => e.preventDefault());

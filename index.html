@@ -40,7 +40,6 @@
 
   <div class="total">
     <div class="total-label" id="totalLabel">9月支出合計</div>
-    <div class="total-yen"><span id="totalYen">0</span><small>円</small></div>
   </div>
 
   <div class="legend">
@@ -48,7 +47,17 @@
     <span><i class="sw-prev"></i><b id="legendPrev">先月</b></span>
   </div>
 
-  <div class="chart" id="chart"></div>
+  <div class="chart">
+    <div class="donut" id="donut">
+      <svg id="ring" viewBox="0 0 100 100" aria-hidden="true">
+        <g id="ringPrev" transform="rotate(-90 50 50)"></g>
+        <g id="ringCur"  transform="rotate(-90 50 50)"></g>
+      </svg>
+      <button type="button" class="donut-center" id="donutCenter"></button>
+      <div class="donut-labels" id="donutLabels"></div>
+    </div>
+    <div class="nodata" id="noData" hidden></div>
+  </div>
 
   <div class="foot">
     <img class="chars" src="./assets/chars.png" alt="" aria-hidden="true">
