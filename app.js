@@ -384,7 +384,7 @@ function openAddMenu() {
   openSheet(`
     <h2>どうやって入力しますか？</h2>
     <button type="button" class="opt one" data-act="camera">${SVG.cam}
-      <span>カメラで<br>レシートを読み取る<small>合計の金額を読みます</small></span></button>
+      <span>カメラで<br>レシートを読み取る<small>合計の金額を読み取ります</small></span></button>
     <button type="button" class="opt two" data-act="voice" style="color:var(--green-deep)">${SVG.mic}
       <span style="color:var(--ink)">声で入力する<small>「電気代 5000円」のように話します</small></span></button>
     <button type="button" class="opt" data-act="manual">${SVG.hand}
@@ -639,118 +639,132 @@ function toNumber(str) {
 }
 
 /* ---------------- 入力：カメラでレシートを読み取る ---------------- */
-/* 読み取りは端末の中だけで行います。写真はどこにも送りません。
-   日本語で「合計」などの項目名を読み、英語（数字が得意）で金額を読んで、
-   同じ行にある数字どうしを突き合わせます。 */
-const OCR_FILES = [
-  './vendor/tesseract.min.js', './vendor/worker.min.js',
-  './vendor/jpn.traineddata.gz', './vendor/eng.traineddata.gz',
+/* Google Gemini（無料わく）に写真をわたして、支払った金額と種類をひとつだけ返してもらいます。
+   APIキーはこの端末の中だけに入れておき、写真は読み取りのときだけ Google に送られます。 */
+const GKEY_STORE  = 'kakeibo.gemini.key';
+const GMODEL_STORE = 'kakeibo.gemini.model';
+const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+// 見つからないときにためす名前（新しいものから順に）
+const MODEL_FALLBACK = [
+  'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash',
+  'gemini-2.5-flash', 'gemini-flash-latest',
 ];
-let tessJpn = null, tessEng = null, tessLoading = null;
-let ocrRunId = 0, ocrProgress = null;
 
-/* この端末で使えるかどうか（WebAssembly の SIMD が必要） */
-function simdSupported() {
-  try {
-    return typeof WebAssembly === 'object' && WebAssembly.validate(new Uint8Array(
-      [0,97,115,109,1,0,0,0,1,5,1,96,0,1,123,3,2,1,0,10,10,1,8,0,65,0,253,15,253,98,11]));
-  } catch (_) { return false; }
-}
-const corePath = () =>
-  simdSupported() ? './vendor/tesseract-core-simd-lstm.js' : './vendor/tesseract-core-lstm.js';
+let ocrRunId = 0;
 
-function loadScript(src) {
-  return new Promise((res, rej) => {
-    const s = document.createElement('script');
-    s.src = src;
-    s.onload = res;
-    s.onerror = () => rej(new Error('script ' + src));
-    document.head.appendChild(s);
-  });
+const readStore = k => { try { return localStorage.getItem(k) || ''; } catch (_) { return ''; } };
+const writeStore = (k, v) => {
+  try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch (_) {}
+};
+const geminiKey = () => readStore(GKEY_STORE);
+
+function httpError(status, body) {
+  const e = new Error('http ' + status);
+  e.status = status; e.body = body || '';
+  return e;
 }
 
-async function getTessWorkers() {
-  if (tessJpn && tessEng) return [tessJpn, tessEng];
-  if (!tessLoading) {
-    tessLoading = (async () => {
-      if (!window.Tesseract) await loadScript('./vendor/tesseract.min.js');
-      const abs = rel => new URL(rel, location.href).href;
-      const opts = {
-        // 置き場所は絶対URLで渡す（別のフォルダに置いても迷わないように）
-        workerPath: abs('./vendor/worker.min.js'),
-        corePath: abs(corePath()),
-        langPath: abs('./vendor'),
-        workerBlobURL: false,   // blob から起こすと wasm の場所が分からなくなるため
-        gzip: true,
-        logger: m => { if (ocrProgress) ocrProgress(m); },
-      };
-      const [j, e] = await Promise.all([
-        window.Tesseract.createWorker('jpn', 1, opts),
-        window.Tesseract.createWorker('eng', 1, opts),
-      ]);
-      // ページの見かたは「自動」にそろえる（既定にまかせると結果がぶれるため）
-      await Promise.all([
-        j.setParameters({ tessedit_pageseg_mode: '3' }),
-        e.setParameters({ tessedit_pageseg_mode: '3' }),
-      ]);
-      tessJpn = j; tessEng = e;
-      cacheOcrFiles();     // つぎからはオフラインでも読めるようにためておく
-      return [j, e];
-    })().catch(err => { tessLoading = null; throw err; });
+/* この鍵で使える、いちばん新しい Flash（無料わく）を選ぶ */
+async function pickModel(key, again) {
+  if (!again) {
+    const saved = readStore(GMODEL_STORE);
+    if (saved) return saved;
   }
-  return tessLoading;
+  let list = [];
+  try {
+    const res = await fetch(`${GEMINI_BASE}/models?pageSize=200&key=${encodeURIComponent(key)}`);
+    if (!res.ok) throw httpError(res.status, await res.text().catch(() => ''));
+    const data = await res.json();
+    list = (data.models || []).map(m => ({
+      id: String(m.name || '').replace(/^models\//, ''),
+      methods: m.supportedGenerationMethods || m.supportedActions || [],
+    })).filter(m =>
+      m.methods.indexOf('generateContent') >= 0 &&
+      /flash/i.test(m.id) &&
+      !/image|tts|audio|embedding|live|dialog|thinking/i.test(m.id));
+  } catch (err) {
+    if (err.status === 400 || err.status === 403) throw err;   // 鍵がちがう
+    list = [];
+  }
+  if (!list.length) {
+    writeStore(GMODEL_STORE, MODEL_FALLBACK[0]);
+    return MODEL_FALLBACK[0];
+  }
+  const score = id => {
+    const v = parseFloat((id.match(/gemini-(\d+(?:\.\d+)?)/) || [0, 0])[1]) || 0;
+    let s = v * 100;
+    if (/lite/.test(id))         s -= 30;
+    if (/preview|exp\b/.test(id)) s -= 20;
+    if (/latest/.test(id))       s -= 5;
+    return s;
+  };
+  list.sort((a, b) => score(b.id) - score(a.id));
+  writeStore(GMODEL_STORE, list[0].id);
+  return list[0].id;
 }
 
-function cacheOcrFiles() {
-  if (!('caches' in window)) return;
-  caches.keys()
-    .then(keys => keys.find(k => k.startsWith('kakeibo-')))
-    .then(name => name && caches.open(name)
-      .then(c => Promise.all([...OCR_FILES, corePath(), corePath().replace(/\.js$/, '.wasm')]
-        .map(u => c.add(u).catch(() => {})))))
-    .catch(() => {});
+const RECEIPT_PROMPT = [
+  'これは日本のレシート、または電気・ガス・水道・携帯電話の請求書の写真です。',
+  '実際に支払う合計金額を、ひとつだけ読み取ってください。',
+  '・「合計」「お買上計」「ご請求金額」「お支払金額」など、最終的に支払う金額を選びます。',
+  '・「小計」「お預り」「お釣り」「ポイント」「残高」「前回」は選びません。',
+  '・税込の金額を選びます。金額は円単位の整数で、カンマは付けません。',
+  '・種類は次から選びます。',
+  '  life = 生活費（食品・日用品・薬・衣類など、下のどれにも当てはまらない買い物すべて）',
+  '  water = 水道代 / power = 電気代 / gas = ガス代 / phone = 携帯電話や通信の料金',
+  '・レシートでも請求書でもない、または金額が読み取れないときは found を false にします。',
+].join('\n');
+
+const RECEIPT_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    found:    { type: 'BOOLEAN' },
+    amount:   { type: 'INTEGER' },
+    category: { type: 'STRING', enum: ['life', 'water', 'power', 'gas', 'phone'] },
+  },
+  required: ['found', 'amount', 'category'],
+};
+
+async function askGemini(key, model, b64) {
+  const res = await fetch(
+    `${GEMINI_BASE}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          role: 'user',
+          parts: [
+            { text: RECEIPT_PROMPT },
+            { inline_data: { mime_type: 'image/jpeg', data: b64 } },
+          ],
+        }],
+        generationConfig: {
+          temperature: 0,
+          responseMimeType: 'application/json',
+          responseSchema: RECEIPT_SCHEMA,
+        },
+      }),
+    });
+  if (!res.ok) throw httpError(res.status, await res.text().catch(() => ''));
+  const data = await res.json();
+  const cand = (data.candidates || [])[0] || {};
+  const parts = (cand.content || {}).parts || [];
+  const text = parts.map(x => x.text || '').join('');
+  try { return JSON.parse(text); } catch (_) { return null; }
 }
 
-/* 写真を、文字を読みやすい白黒に直す（明るさのムラに強いやり方） */
-function prepareImage(img) {
-  const MAX = 1600;
-  const scale = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
+/* 写真を、送るのにちょうどよい大きさの JPEG にする */
+function toJpegBase64(img, max) {
+  const scale = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
   const w = Math.max(1, Math.round(img.naturalWidth * scale));
   const h = Math.max(1, Math.round(img.naturalHeight * scale));
   const cv = document.createElement('canvas');
   cv.width = w; cv.height = h;
-  const cx = cv.getContext('2d', { willReadFrequently: true });
+  const cx = cv.getContext('2d');
+  cx.fillStyle = '#fff'; cx.fillRect(0, 0, w, h);
   cx.drawImage(img, 0, 0, w, h);
-
-  const im = cx.getImageData(0, 0, w, h), d = im.data;
-  const gray = new Uint8Array(w * h);
-  for (let i = 0, p = 0; p < gray.length; i += 4, p++)
-    gray[p] = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) | 0;
-
-  const iw = w + 1;
-  const integral = new Float64Array(iw * (h + 1));
-  for (let y = 0; y < h; y++) {
-    let rowSum = 0;
-    for (let x = 0; x < w; x++) {
-      rowSum += gray[y * w + x];
-      integral[(y + 1) * iw + x + 1] = integral[y * iw + x + 1] + rowSum;
-    }
-  }
-  const S = Math.max(8, Math.round(w / 16)), T = 0.88;
-  for (let y = 0; y < h; y++) {
-    const y1 = Math.max(0, y - S), y2 = Math.min(h - 1, y + S);
-    for (let x = 0; x < w; x++) {
-      const x1 = Math.max(0, x - S), x2 = Math.min(w - 1, x + S);
-      const area = (x2 - x1 + 1) * (y2 - y1 + 1);
-      const sum = integral[(y2 + 1) * iw + x2 + 1] - integral[y1 * iw + x2 + 1]
-                - integral[(y2 + 1) * iw + x1] + integral[y1 * iw + x1];
-      const v = gray[y * w + x] * area < sum * T ? 0 : 255;
-      const i = (y * w + x) * 4;
-      d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
-    }
-  }
-  cx.putImageData(im, 0, 0);
-  return cv;
+  return cv.toDataURL('image/jpeg', 0.85).split(',')[1];
 }
 
 function readImageFile(file) {
@@ -763,109 +777,10 @@ function readImageFile(file) {
   });
 }
 
-/* ---- 読み取った結果の読みとき ---- */
-const half = t => String(t || '')
-  .replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
-  .replace(/[，、]/g, ',')
-  .replace(/[¥￥]/g, '')
-  .replace(/\s+/g, ' ')
-  .replace(/(\d)\s*,\s*(\d)/g, '$1,$2')   // 「10, 479」のような読みまちがいを直す
-  .trim();
-
-function eachLine(data) {
-  const out = [];
-  for (const b of (data && data.blocks) || [])
-    for (const pa of b.paragraphs || [])
-      for (const ln of pa.lines || [])
-        out.push({ text: half(ln.text), y0: ln.bbox.y0, y1: ln.bbox.y1, words: ln.words || [] });
-  return out;
-}
-
-const RE_MONEY = /\d{1,3}(?:,\d{3})+|\d{2,7}/g;
-const RE_SKIP  = /\d{4}[-\/年]\d{1,2}[-\/月]|\d{1,2}:\d{2}|\d{2,4}-\d{2,4}-\d{3,4}/;
-
-function lineScore(text) {
-  let s = 0;
-  if (/合\s*計|ごうけい|お買上|お買い上げ|税込|請求/.test(text)) s += 120;
-  else if (/小\s*計|しょうけい/.test(text))                     s += 45;
-  if (/預|あずか|釣|つり|ポイント|point|残高|割引|値引/i.test(text)) s -= 90;
-  return s;
-}
-function detectCategory(text) {
-  if (/電気|でんき|電力/.test(text))  return 'power';
-  if (/水道/.test(text))              return 'water';
-  if (/ガス|瓦斯/.test(text))         return 'gas';
-  if (/携帯|ドコモ|docomo|ソフトバンク|softbank|楽天モバイル|ワイモバイル|通信料/i.test(text)) return 'phone';
-  return null;
-}
-
-/* 日本語の行（項目名）と、英語で読んだ数字を、行の高さで突き合わせる */
-function readReceipt(jpData, enData) {
-  const jpLines = eachLine(jpData);
-  const whole = jpLines.map(l => l.text).join('\n');
-  const cands = new Map();
-
-  const addAll = (text, label, srcBonus) => {
-    if (RE_SKIP.test(label)) return;
-    const base = lineScore(label) + srcBonus;
-    for (const m of half(text).match(RE_MONEY) || []) {
-      const v = Number(m.replace(/,/g, ''));
-      if (!(v >= 10 && v <= 999999)) continue;
-      const sc = base + (m.indexOf(',') >= 0 ? 30 : 0) + Math.min(24, String(v).length * 4);
-      if (!cands.has(v) || cands.get(v) < sc) cands.set(v, sc);
-    }
-  };
-  const labelAt = y => {
-    const l = jpLines.find(o => y >= o.y0 - 6 && y <= o.y1 + 6);
-    return l ? l.text : '';
-  };
-
-  // 英語で読んだ数字（数字はこちらのほうが正確）
-  for (const ln of eachLine(enData)) {
-    const label = labelAt((ln.y0 + ln.y1) / 2) || ln.text;
-    addAll(ln.text, label, 15);
-    for (const w of ln.words) addAll(w.text, labelAt((w.bbox.y0 + w.bbox.y1) / 2) || label, 15);
-  }
-  // 日本語側の数字も、控えめに候補へ入れておく
-  for (const ln of jpLines) addAll(ln.text, ln.text, 0);
-
-  // 「402」と「2402」のように上のけたが落ちた読みは、長いほうにまとめる
-  const keys = [...cands.keys()];
-  for (const a of keys) {
-    const sa = String(a);
-    for (const b of keys) {
-      const sb = String(b);
-      if (b !== a && sb.length > sa.length && sb.length - sa.length <= 2 && sb.endsWith(sa))
-        cands.set(b, Math.max(cands.get(b), cands.get(a) + 5));
-    }
-  }
-
-  // 上位のものの一部だけを読みそこねた数（10479 に対する 479 や 10）は候補から外す
-  const amounts = [];
-  for (const [v] of [...cands.entries()].sort((x, y) => y[1] - x[1] || y[0] - x[0])) {
-    const sv = String(v);
-    if (amounts.some(k => {
-      const sk = String(k);
-      return sk.length > sv.length && (sk.endsWith(sv) || sk.startsWith(sv));
-    })) continue;
-    amounts.push(v);
-    if (amounts.length === 4) break;
-  }
-  return { amounts, cat: detectCategory(whole) || DEFAULT_CAT };
-}
-
-async function ocrReceipt(canvas, setStep) {
-  const [wj, we] = await getTessWorkers();
-  setStep('文字を読んでいます', 0.45);
-  const jp = await wj.recognize(canvas, {}, { text: true, blocks: true });
-  setStep('金額を読んでいます', 0.75);
-  const en = await we.recognize(canvas, {}, { text: true, blocks: true });
-  return readReceipt(jp.data, en.data);
-}
-
 /* ---- 画面まわり ---- */
 function openCamera() {
-  if (!window.WebAssembly) { openOcrUnavailable(); return; }
+  if (!geminiKey())      { openKeyNeeded(); return; }
+  if (!navigator.onLine) { openCameraOffline(); return; }
   const input = $('shot');
   input.value = '';
   input.onchange = () => {
@@ -876,72 +791,50 @@ function openCamera() {
   input.click();   // 押したその場でひらく（iPhone でも動くように）
 }
 
-function openOcrUnavailable() {
-  openSheet(`
-    <h2>この端末ではレシートの読み取りが使えません</h2>
-    <p class="sheet-lead">かわりに、手で入力してください。</p>
-    <button type="button" class="btn-go" data-act="manual">手で入力する</button>
-    <button type="button" class="btn-wide" data-act="close">やめる</button>
-  `);
-}
-
 async function runOcr(file) {
   const runId = ++ocrRunId;
-  const first = !tessJpn;
   openSheet(`
     <h2>レシートを読んでいます</h2>
-    ${first ? '<div class="ocr-note">はじめてなので、じゅんびに少し時間がかかります。<br>Wi-Fi のあるところだと早く終わります。<br>つぎからは待ちません。</div>' : ''}
-    <p class="sheet-lead" id="ocrMsg">しばらくお待ちください</p>
-    <div class="ocr-bar"><i id="ocrBar"></i></div>
+    <p class="sheet-lead">しばらくお待ちください</p>
+    <div class="ocr-bar wait"><i></i></div>
     <button type="button" class="btn-wide" data-act="close">やめる</button>
-  `, () => { ocrRunId++; ocrProgress = null; });   // 「やめる」で結果を捨てる
+  `, () => { ocrRunId++; });
 
-  let phase = 0;
-  const setStep = (msg, pct) => {
-    if (runId !== ocrRunId) return;
-    phase = Math.max(phase, pct);
-    const t = $('ocrMsg'), b = $('ocrBar');
-    if (t && msg) t.textContent = msg;
-    if (b) b.style.width = Math.round(Math.max(0, Math.min(1, phase)) * 100) + '%';
-  };
-  ocrProgress = m => {
-    const p = typeof m.progress === 'number' ? m.progress : 0;
-    if (m.status === 'recognizing text') setStep(null, phase + p * 0.001);
-    else setStep('じゅんびしています', Math.min(0.4, p * 0.4));
-  };
-
+  const key = geminiKey();
   try {
-    setStep('写真を整えています', 0.05);
     const img = await readImageFile(file);
     if (runId !== ocrRunId) return;
-    const canvas = prepareImage(img);
+    const b64 = toJpegBase64(img, 1152);
     if (runId !== ocrRunId) return;
 
-    const r = await ocrReceipt(canvas, setStep);
+    let model = await pickModel(key, false);
+    let out;
+    try {
+      out = await askGemini(key, model, b64);
+    } catch (err) {
+      // 名前が古くなっていたら、選びなおしてもう一度だけためす
+      if (err.status === 404 || err.status === 400) {
+        model = await pickModel(key, true);
+        out = await askGemini(key, model, b64);
+      } else throw err;
+    }
     if (runId !== ocrRunId) return;
 
-    ocrProgress = null;
-    if (!r.amounts.length) { openOcrFailed(); return; }
-    openCandidates(r.amounts, r.cat);
+    const amount = Math.round(Number(out && out.amount) || 0);
+    const cat = out && CAT_NAME[out.category] ? out.category : DEFAULT_CAT;
+    if (!out || out.found === false || !(amount >= 1 && amount <= 9999999)) {
+      openOcrFailed();
+      return;
+    }
+    openConfirm(amount, cat, openCamera);
   } catch (err) {
     if (runId !== ocrRunId) return;
-    ocrProgress = null;
-    openOcrFailed(true);
+    const st = err && err.status;
+    if (st === 400 || st === 403)      openKeyBad();
+    else if (st === 429)               openQuotaOver();
+    else if (!navigator.onLine)        openCameraOffline();
+    else                               openOcrFailed(true);
   }
-}
-
-function openCandidates(amounts, cat) {
-  openSheet(`
-    <h2>この金額でいいですか？</h2>
-    ${amounts.map((v, i) =>
-      `<button type="button" class="amtbtn${i === 0 ? ' first' : ''}" data-amt="${v}">${fmt(v)}<small>円</small></button>`
-    ).join('')}
-    <button type="button" class="btn-wide" data-act="manual">この中にない（手で入力）</button>
-    <button type="button" class="btn-wide" data-act="close">やめる</button>
-  `);
-  el.sheet.querySelectorAll('.amtbtn').forEach(b => {
-    b.addEventListener('click', () => openCategory(Number(b.dataset.amt), cat));
-  });
 }
 
 function openOcrFailed(broken) {
@@ -950,10 +843,106 @@ function openOcrFailed(broken) {
     <div class="ocr-note">${broken
       ? 'もう一度おためしください。'
       : '明るいところで、レシート全体がまっすぐ入るように<br>うつすと読みやすくなります。'}</div>
-    <button type="button" class="btn-go" data-act="ocr-retry">もう一度うつす</button>
+    <button type="button" class="btn-go" data-act="camera">もう一度うつす</button>
     <button type="button" class="btn-wide" data-act="manual">手で入力する</button>
     <button type="button" class="btn-wide" data-act="close">やめる</button>
   `);
+}
+
+function openCameraOffline() {
+  openSheet(`
+    <h2>ネットにつながっていません</h2>
+    <div class="ocr-note">レシートの読み取りには、インターネットが必要です。<br>
+      Wi-Fi のあるところでおためしください。</div>
+    <button type="button" class="btn-go" data-act="manual">手で入力する</button>
+    <button type="button" class="btn-wide" data-act="close">やめる</button>
+  `);
+}
+
+function openQuotaOver() {
+  openSheet(`
+    <h2>きょうのぶんを使い切りました</h2>
+    <div class="ocr-note">レシートの読み取りは、あすまた使えます。</div>
+    <button type="button" class="btn-go" data-act="manual">手で入力する</button>
+    <button type="button" class="btn-wide" data-act="close">やめる</button>
+  `);
+}
+
+function openKeyNeeded() {
+  openSheet(`
+    <h2>カメラの準備がまだです</h2>
+    <div class="ocr-note">レシートの読み取りを使うには、はじめに設定が必要です。<br>
+      ご家族の方に設定してもらってください。</div>
+    <button type="button" class="btn-go" data-act="settings">設定する</button>
+    <button type="button" class="btn-wide" data-act="manual">手で入力する</button>
+    <button type="button" class="btn-wide" data-act="close">やめる</button>
+  `);
+}
+
+function openKeyBad() {
+  openSheet(`
+    <h2>設定が正しくないようです</h2>
+    <div class="ocr-note">読み取りの設定（APIキー）をもう一度たしかめてください。</div>
+    <button type="button" class="btn-go" data-act="settings">設定を見る</button>
+    <button type="button" class="btn-wide" data-act="manual">手で入力する</button>
+    <button type="button" class="btn-wide" data-act="close">やめる</button>
+  `);
+}
+
+/* ---- 設定（ご家族の方むけ。合計の見出しを1秒ちょっと長押しでひらきます） ---- */
+function openSettings() {
+  const key = geminiKey();
+  const model = readStore(GMODEL_STORE);
+  openSheet(`
+    <h2>カメラの設定</h2>
+    <div class="ocr-note">
+      レシートの読み取りに Google Gemini（無料わく）を使います。<br>
+      ① <b>aistudio.google.com/apikey</b> で API キーを作る<br>
+      ② 下に貼りつけて「保存する」<br>
+      キーはこの端末の中だけに保存します。
+    </div>
+    <input id="gkey" class="keyfield" type="text" autocomplete="off" autocorrect="off"
+           spellcheck="false" placeholder="AIza..." value="${key.replace(/"/g, '&quot;')}">
+    <p class="sheet-lead" id="gmsg">${key
+      ? '設定ずみです' + (model ? `（${model}）` : '')
+      : 'まだ設定されていません'}</p>
+    <button type="button" class="btn-go" id="gsave">保存する</button>
+    ${key ? '<button type="button" class="btn-del" data-act="key-clear">設定を消す</button>' : ''}
+    <button type="button" class="btn-wide" data-act="close">とじる</button>
+  `);
+  const input = $('gkey'), msg = $('gmsg'), save = $('gsave');
+  save.addEventListener('click', async () => {
+    const k = input.value.trim();
+    if (!k) { msg.textContent = 'キーを貼りつけてください'; return; }
+    writeStore(GKEY_STORE, k);
+    writeStore(GMODEL_STORE, '');
+    save.disabled = true;
+    msg.textContent = 'たしかめています…';
+    try {
+      const m = await pickModel(k, true);
+      msg.textContent = `使えます（${m}）`;
+    } catch (err) {
+      msg.textContent = (err && (err.status === 400 || err.status === 403))
+        ? 'このキーは使えないようです' : 'たしかめられませんでした（ネットの状態をご確認ください）';
+    }
+    save.disabled = false;
+  });
+}
+
+function clearSettings() {
+  writeStore(GKEY_STORE, '');
+  writeStore(GMODEL_STORE, '');
+  closeSheet();
+  showToast('設定を消しました', '', 1800);
+}
+
+/* リンクで渡されたキーを受け取る（?key=… または ?gkey=…） */
+function takeKeyFromUrl() {
+  const m = location.search.match(/[?&](?:g?key)=([^&]+)/);
+  if (!m) return;
+  writeStore(GKEY_STORE, decodeURIComponent(m[1]).trim());
+  writeStore(GMODEL_STORE, '');
+  try { history.replaceState(null, '', location.pathname + location.hash); } catch (_) {}
 }
 
 /* ---------------- LINEなどへ送る（画像2枚） ---------------- */
@@ -1177,7 +1166,8 @@ function onTap(ev) {
     case 'manual':      stopVoice(); openManual(); break;
     case 'voice':       openVoice(); break;
     case 'camera':      openCamera(); break;
-    case 'ocr-retry':   openCamera(); break;
+    case 'settings':    openSettings(); break;
+    case 'key-clear':   clearSettings(); break;
     case 'delete':      openDeleteLast(); break;
     case 'delete-yes':  deleteLast(); break;
   }
@@ -1214,6 +1204,7 @@ function runSplash() {
 
 /* ---------------- はじめる ---------------- */
 function init() {
+  takeKeyFromUrl();
   lockAppHeight();
   watchKeyboard();
   render();
@@ -1232,6 +1223,15 @@ function init() {
 
   // 円グラフをタップすると、そのカテゴリの金額をまんなかに出す
   el.donut.addEventListener('click', onDonutTap);
+
+  // 合計の見出しを長おしすると、カメラの設定がひらきます（ご家族の方むけ）
+  let holdTimer = null;
+  const hold = () => { clearTimeout(holdTimer); holdTimer = setTimeout(openSettings, 1200); };
+  const release = () => clearTimeout(holdTimer);
+  el.totalLabel.addEventListener('pointerdown', hold);
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev =>
+    el.totalLabel.addEventListener(ev, release));
+  el.totalLabel.addEventListener('contextmenu', e => e.preventDefault());
   if (el.chars) el.chars.addEventListener('load', layoutChars);
 
   // 月がかわったら自動でいれかえる

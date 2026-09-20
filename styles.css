@@ -117,35 +117,40 @@ img{display:block}
 .dlabel.dim{opacity:.35}
 
 /* --- 下の段 --- */
-.foot{position:relative;height:calc(clamp(172px,calc(var(--u) * 22.4),200px) + var(--safeb))}
+.foot{position:relative;height:calc(clamp(184px,calc(var(--u) * 24.8),214px) + var(--safeb))}
 /* キャラクターの大きさは JS が、まわりのボタンに当たらないぎりぎりまで広げます */
 .chars{
-  position:absolute;left:-10px;bottom:var(--safeb);width:clamp(140px,calc(var(--u) * 24),210px);
+  position:absolute;left:-10px;bottom:calc(10px + var(--safeb));
+  width:clamp(140px,calc(var(--u) * 24),210px);
   height:auto;pointer-events:none;z-index:1;filter:drop-shadow(0 3px 6px rgba(0,0,0,.15));
 }
+/* 「送る」と「＋」は右がわに、しっかり間をあけてたてに並べる */
+.foot-actions{
+  position:absolute;right:12px;bottom:calc(10px + var(--safeb));z-index:2;
+  display:flex;flex-direction:column;align-items:flex-end;gap:14px;
+}
 .plus{
-  position:absolute;bottom:calc(4px + var(--safeb));right:12px;
   width:clamp(90px,calc(var(--u) * 14.4),114px);aspect-ratio:1;border-radius:50%;
   background:var(--pink-strong);color:#fff;border:5px solid #fff;
   box-shadow:0 5px 0 rgba(150,40,80,.32),0 8px 18px rgba(0,0,0,.22);
   display:flex;flex-direction:column;align-items:center;justify-content:center;
-  font-weight:900;line-height:1;z-index:2;font-size:clamp(90px,calc(var(--u) * 14.4),114px);
+  font-weight:900;line-height:1;font-size:clamp(90px,calc(var(--u) * 14.4),114px);
 }
 .plus-p{font-size:.52em;margin-top:-.04em}
 .plus-t{font-size:.16em;margin-top:.05em}
 .plus:active{transform:translateY(4px);box-shadow:0 1px 0 rgba(150,40,80,.32)}
 .send{
-  position:absolute;right:8px;top:1px;min-height:68px;padding:0 15px;
-  border-radius:15px;border:3px solid var(--green-deep);background:#fff;color:var(--green-deep);
-  font-size:clamp(22px,calc(var(--u) * 3.3),27px);font-weight:900;display:flex;align-items:center;gap:6px;
-  box-shadow:var(--sh);z-index:2;
+  min-height:68px;padding:0 15px;border-radius:15px;border:3px solid var(--green-deep);
+  background:#fff;color:var(--green-deep);
+  font-size:clamp(22px,calc(var(--u) * 3.3),27px);font-weight:900;
+  display:flex;align-items:center;gap:6px;box-shadow:var(--sh);
 }
 .send svg{width:1.15em;height:1.15em}
 .send:active{transform:translateY(2px);box-shadow:none}
 .viewonly{
-  position:absolute;right:8px;top:6px;background:rgba(255,255,255,.94);
-  border:2px solid var(--past-bar);color:var(--past-ink);border-radius:13px;
-  padding:9px 15px;font-size:clamp(20px,calc(var(--u) * 3),25px);font-weight:800;z-index:2;
+  background:rgba(255,255,255,.94);border:2px solid var(--past-bar);color:var(--past-ink);
+  border-radius:13px;padding:9px 15px;
+  font-size:clamp(20px,calc(var(--u) * 3),25px);font-weight:800;
   text-align:center;line-height:1.4;
 }
 
@@ -207,22 +212,19 @@ img{display:block}
 }
 .ocr-bar i{display:block;height:100%;width:0;background:var(--pink-strong);
   border-radius:999px;transition:width .3s ease}
+.ocr-bar.wait i{width:42%;animation:ocrwait 1.1s ease-in-out infinite alternate}
+@keyframes ocrwait{from{margin-left:0}to{margin-left:58%}}
 .ocr-note{
   text-align:left;background:#FFF3D6;border:3px solid #E0B44A;border-radius:14px;
   padding:12px 14px;font-size:clamp(20px,calc(var(--u) * 3),24px);font-weight:700;
   line-height:1.55;margin-bottom:8px;
 }
-/* 読み取れた金額の候補 */
-.amtbtn{
-  width:100%;min-height:clamp(78px,calc(var(--u) * 11.8),94px);border-radius:17px;
-  border:3px solid var(--ink);background:#fff;color:var(--ink);
-  font-size:clamp(32px,calc(var(--u) * 5),42px);font-weight:900;
-  display:flex;align-items:center;justify-content:center;gap:2px;
-  margin-bottom:10px;box-shadow:var(--sh);
+/* 設定のキー入力欄 */
+.keyfield{
+  width:100%;min-height:64px;border:3px solid var(--ink);border-radius:14px;background:#fff;
+  color:var(--ink);font-family:inherit;font-size:20px;font-weight:700;padding:0 14px;
+  margin-bottom:6px;-webkit-user-select:text;user-select:text;
 }
-.amtbtn.first{background:var(--green-pale);border-color:var(--green-deep);border-width:5px}
-.amtbtn small{font-size:.55em}
-.amtbtn:active{transform:translateY(2px);box-shadow:none}
 
 /* 金額の入力 */
 .amount-field{
@@ -353,6 +355,7 @@ img{display:block}
 
 @media (prefers-reduced-motion:reduce){
   .mold-fill::before{animation:none}
+  .ocr-bar.wait i{animation:none;width:100%}
   .mic-circle.on{animation:none}
   .bar{transition:none}
 }
