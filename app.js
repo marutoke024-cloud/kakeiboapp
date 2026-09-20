@@ -83,7 +83,7 @@ const $ = id => document.getElementById(id);
 const el = {
   app: $('app'), totalLabel: $('totalLabel'),
   legendCur: $('legendCur'), legendPrev: $('legendPrev'),
-  donut: $('donut'), donutCenter: $('donutCenter'), donutLabels: $('donutLabels'), noData: $('noData'),
+  donut: $('donut'), donutCenter: $('donutCenter'), donutLabels: $('donutLabels'),
   foot: document.querySelector('.foot'), chars: document.querySelector('.chars'),
   btnPrev: $('btnPrev'), btnNow: $('btnNow'), btnAdd: $('btnAdd'), btnShare: $('btnShare'),
   viewOnly: $('viewOnly'), scrim: $('scrim'), sheet: $('sheet'),
@@ -176,15 +176,6 @@ function fitCenter() {
   if (w > hole) big.style.transform = `scale(${(hole / w).toFixed(3)})`;
 }
 
-/* 入力がまだないカテゴリ */
-function renderNoData(cur) {
-  const empty = CATS.filter(c => !(cur[c.key] > 0));
-  if (!empty.length) { el.noData.hidden = true; el.noData.innerHTML = ''; return; }
-  el.noData.hidden = false;
-  el.noData.innerHTML = 'まだありません：' +
-    empty.map(c => `<button type="button" class="nochip" data-cat="${c.key}">${c.name}</button>`).join('');
-}
-
 /* 選んだカテゴリだけをはっきりさせる */
 function applyDim() {
   document.querySelectorAll('#ring .slice').forEach(sl => {
@@ -194,25 +185,36 @@ function applyDim() {
   });
   el.donutLabels.querySelectorAll('.dlabel').forEach(n =>
     n.classList.toggle('dim', !!selectedCat && n.dataset.cat !== selectedCat));
-  el.noData.querySelectorAll('.nochip').forEach(n =>
-    n.classList.toggle('dim', !!selectedCat && n.dataset.cat !== selectedCat));
 }
 
-/* 輪の大きさと、まわりのカテゴリ名の位置を決める */
+/* 輪の大きさと位置、まわりのカテゴリ名の置き場所を決める */
 function layoutDonut() {
   const box = el.donut.getBoundingClientRect();
   if (!box.width || !box.height) return;
-  const S = Math.max(140, Math.min(box.width - 30, box.height - 18));
+  const S = Math.max(140, Math.min(box.width - 20, box.height - 16));
   donutS = S;
   const svg = $('ring');
   svg.setAttribute('width', S);
   svg.setAttribute('height', S);
 
+  // ① いったん輪をいちばん上に寄せて、キャラクターを最大まで広げる
+  svg.style.top = '0px';
+  layoutChars();
+
+  // ② 余ったすき間を、輪の上と下で半分ずつに分ける
+  const charsTop = el.chars ? el.chars.getBoundingClientRect().top : box.bottom;
+  const slack = Math.max(0, (charsTop - 8) - (box.top + S));
+  const marginTop = Math.min(Math.max(0, box.height - S), Math.round(slack / 2));
+  svg.style.top = marginTop + 'px';
+
+  const cx = box.width / 2, cy = marginTop + S / 2;
+  el.donutCenter.style.top = cy + 'px';
+
+  // ③ カテゴリ名を輪のまわりに置く
   el.donutLabels.innerHTML = lastMids.map(o =>
     `<span class="dlabel" data-cat="${o.key}" style="color:${lastIsPast ? PAST_LABEL_COLOR : CAT_COLOR[o.key].text}">${CAT_NAME[o.key]}</span>`
   ).join('');
 
-  const cx = box.width / 2, cy = box.height / 2;
   const R = (RING.prevR + RING.prevW / 2 + 5) / 100 * S;   // 輪のすぐ外がわ
   const placed = [...el.donutLabels.children].map((n, i) => {
     const a = lastMids[i].angle * Math.PI / 180;
@@ -242,7 +244,6 @@ function layoutDonut() {
 
   fitCenter();
   applyDim();
-  layoutChars();
 }
 
 /* キャラクターを、まわりのボタンや文字に当たらないぎりぎりまで大きくする */
@@ -257,9 +258,8 @@ function layoutChars() {
   for (const e of [el.btnAdd, el.btnShare, el.viewOnly])
     if (visible(e)) right = Math.min(right, e.getBoundingClientRect().left - 6);
 
-  // 上がわの限界：「まだありません」の行があればその下、なければ輪の下まで使える
-  const nd = visible(el.noData) ? el.noData.getBoundingClientRect() : null;
-  const top = nd ? nd.bottom + 2 : $('ring').getBoundingClientRect().bottom + 8;
+  // 上がわの限界：輪の下ぎりぎりまで
+  const top = $('ring').getBoundingClientRect().bottom + 8;
 
   // 下の端は CSS が安全域（iPhone のホームバーぶん）を引いた位置に置いてくれている
   const bottom = img.getBoundingClientRect().bottom;
@@ -326,7 +326,6 @@ function render() {
   el.legendPrev.textContent = monthNum(addMonths(viewYM, -1)) + '月';
 
   lastMids = drawRings(lastCur, lastPrev);
-  renderNoData(lastCur);
   paintCenter();
   layoutDonut();
   requestAnimationFrame(layoutDonut);   // 文字の幅が確定してからもう一度ととのえる
@@ -1234,10 +1233,6 @@ function init() {
   // 円グラフをタップすると、そのカテゴリの金額をまんなかに出す
   el.donut.addEventListener('click', onDonutTap);
   if (el.chars) el.chars.addEventListener('load', layoutChars);
-  el.noData.addEventListener('click', ev => {
-    const n = ev.target.closest('.nochip');
-    if (n) selectCat(n.dataset.cat);
-  });
 
   // 月がかわったら自動でいれかえる
   setInterval(refreshCurrentMonth, 60000);
