@@ -1,5 +1,5 @@
 /* かけい簿 ─ オフラインでも動くようにするための仕組み */
-const CACHE = 'kakeibo-v1';
+const CACHE = 'kakeibo-v2';
 const FILES = [
   './',
   './index.html',

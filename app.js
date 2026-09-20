@@ -359,8 +359,8 @@ function showToast(text, sub, ms) {
 function openAddMenu() {
   openSheet(`
     <h2>どうやって入力しますか？</h2>
-    <button type="button" class="opt one soon" data-act="camera">${SVG.cam}
-      <span>カメラで<br>レシートを読み取る<small>じゅんび中です</small></span></button>
+    <button type="button" class="opt one" data-act="camera">${SVG.cam}
+      <span>カメラで<br>レシートを読み取る<small>合計の金額を読みます</small></span></button>
     <button type="button" class="opt two" data-act="voice" style="color:var(--green-deep)">${SVG.mic}
       <span style="color:var(--ink)">声で入力する<small>「電気代 5000円」のように話します</small></span></button>
     <button type="button" class="opt" data-act="manual">${SVG.hand}
@@ -614,6 +614,324 @@ function toNumber(str) {
   return sawDigit ? total + section + num : 0;
 }
 
+/* ---------------- 入力：カメラでレシートを読み取る ---------------- */
+/* 読み取りは端末の中だけで行います。写真はどこにも送りません。
+   日本語で「合計」などの項目名を読み、英語（数字が得意）で金額を読んで、
+   同じ行にある数字どうしを突き合わせます。 */
+const OCR_FILES = [
+  './vendor/tesseract.min.js', './vendor/worker.min.js',
+  './vendor/jpn.traineddata.gz', './vendor/eng.traineddata.gz',
+];
+let tessJpn = null, tessEng = null, tessLoading = null;
+let ocrRunId = 0, ocrProgress = null;
+
+/* この端末で使えるかどうか（WebAssembly の SIMD が必要） */
+function simdSupported() {
+  try {
+    return typeof WebAssembly === 'object' && WebAssembly.validate(new Uint8Array(
+      [0,97,115,109,1,0,0,0,1,5,1,96,0,1,123,3,2,1,0,10,10,1,8,0,65,0,253,15,253,98,11]));
+  } catch (_) { return false; }
+}
+const corePath = () =>
+  simdSupported() ? './vendor/tesseract-core-simd-lstm.js' : './vendor/tesseract-core-lstm.js';
+
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = res;
+    s.onerror = () => rej(new Error('script ' + src));
+    document.head.appendChild(s);
+  });
+}
+
+async function getTessWorkers() {
+  if (tessJpn && tessEng) return [tessJpn, tessEng];
+  if (!tessLoading) {
+    tessLoading = (async () => {
+      if (!window.Tesseract) await loadScript('./vendor/tesseract.min.js');
+      const abs = rel => new URL(rel, location.href).href;
+      const opts = {
+        // 置き場所は絶対URLで渡す（別のフォルダに置いても迷わないように）
+        workerPath: abs('./vendor/worker.min.js'),
+        corePath: abs(corePath()),
+        langPath: abs('./vendor'),
+        workerBlobURL: false,   // blob から起こすと wasm の場所が分からなくなるため
+        gzip: true,
+        logger: m => { if (ocrProgress) ocrProgress(m); },
+      };
+      const [j, e] = await Promise.all([
+        window.Tesseract.createWorker('jpn', 1, opts),
+        window.Tesseract.createWorker('eng', 1, opts),
+      ]);
+      // ページの見かたは「自動」にそろえる（既定にまかせると結果がぶれるため）
+      await Promise.all([
+        j.setParameters({ tessedit_pageseg_mode: '3' }),
+        e.setParameters({ tessedit_pageseg_mode: '3' }),
+      ]);
+      tessJpn = j; tessEng = e;
+      cacheOcrFiles();     // つぎからはオフラインでも読めるようにためておく
+      return [j, e];
+    })().catch(err => { tessLoading = null; throw err; });
+  }
+  return tessLoading;
+}
+
+function cacheOcrFiles() {
+  if (!('caches' in window)) return;
+  caches.keys()
+    .then(keys => keys.find(k => k.startsWith('kakeibo-')))
+    .then(name => name && caches.open(name)
+      .then(c => Promise.all([...OCR_FILES, corePath(), corePath().replace(/\.js$/, '.wasm')]
+        .map(u => c.add(u).catch(() => {})))))
+    .catch(() => {});
+}
+
+/* 写真を、文字を読みやすい白黒に直す（明るさのムラに強いやり方） */
+function prepareImage(img) {
+  const MAX = 1600;
+  const scale = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
+  const w = Math.max(1, Math.round(img.naturalWidth * scale));
+  const h = Math.max(1, Math.round(img.naturalHeight * scale));
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  const cx = cv.getContext('2d', { willReadFrequently: true });
+  cx.drawImage(img, 0, 0, w, h);
+
+  const im = cx.getImageData(0, 0, w, h), d = im.data;
+  const gray = new Uint8Array(w * h);
+  for (let i = 0, p = 0; p < gray.length; i += 4, p++)
+    gray[p] = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) | 0;
+
+  const iw = w + 1;
+  const integral = new Float64Array(iw * (h + 1));
+  for (let y = 0; y < h; y++) {
+    let rowSum = 0;
+    for (let x = 0; x < w; x++) {
+      rowSum += gray[y * w + x];
+      integral[(y + 1) * iw + x + 1] = integral[y * iw + x + 1] + rowSum;
+    }
+  }
+  const S = Math.max(8, Math.round(w / 16)), T = 0.88;
+  for (let y = 0; y < h; y++) {
+    const y1 = Math.max(0, y - S), y2 = Math.min(h - 1, y + S);
+    for (let x = 0; x < w; x++) {
+      const x1 = Math.max(0, x - S), x2 = Math.min(w - 1, x + S);
+      const area = (x2 - x1 + 1) * (y2 - y1 + 1);
+      const sum = integral[(y2 + 1) * iw + x2 + 1] - integral[y1 * iw + x2 + 1]
+                - integral[(y2 + 1) * iw + x1] + integral[y1 * iw + x1];
+      const v = gray[y * w + x] * area < sum * T ? 0 : 255;
+      const i = (y * w + x) * 4;
+      d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+    }
+  }
+  cx.putImageData(im, 0, 0);
+  return cv;
+}
+
+function readImageFile(file) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); res(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('image')); };
+    img.src = url;
+  });
+}
+
+/* ---- 読み取った結果の読みとき ---- */
+const half = t => String(t || '')
+  .replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+  .replace(/[，、]/g, ',')
+  .replace(/[¥￥]/g, '')
+  .replace(/\s+/g, ' ')
+  .replace(/(\d)\s*,\s*(\d)/g, '$1,$2')   // 「10, 479」のような読みまちがいを直す
+  .trim();
+
+function eachLine(data) {
+  const out = [];
+  for (const b of (data && data.blocks) || [])
+    for (const pa of b.paragraphs || [])
+      for (const ln of pa.lines || [])
+        out.push({ text: half(ln.text), y0: ln.bbox.y0, y1: ln.bbox.y1, words: ln.words || [] });
+  return out;
+}
+
+const RE_MONEY = /\d{1,3}(?:,\d{3})+|\d{2,7}/g;
+const RE_SKIP  = /\d{4}[-\/年]\d{1,2}[-\/月]|\d{1,2}:\d{2}|\d{2,4}-\d{2,4}-\d{3,4}/;
+
+function lineScore(text) {
+  let s = 0;
+  if (/合\s*計|ごうけい|お買上|お買い上げ|税込|請求/.test(text)) s += 120;
+  else if (/小\s*計|しょうけい/.test(text))                     s += 45;
+  if (/預|あずか|釣|つり|ポイント|point|残高|割引|値引/i.test(text)) s -= 90;
+  return s;
+}
+function detectCategory(text) {
+  if (/電気|でんき|電力/.test(text))  return 'power';
+  if (/水道/.test(text))              return 'water';
+  if (/ガス|瓦斯/.test(text))         return 'gas';
+  if (/携帯|ドコモ|docomo|ソフトバンク|softbank|楽天モバイル|ワイモバイル|通信料/i.test(text)) return 'phone';
+  return null;
+}
+
+/* 日本語の行（項目名）と、英語で読んだ数字を、行の高さで突き合わせる */
+function readReceipt(jpData, enData) {
+  const jpLines = eachLine(jpData);
+  const whole = jpLines.map(l => l.text).join('\n');
+  const cands = new Map();
+
+  const addAll = (text, label, srcBonus) => {
+    if (RE_SKIP.test(label)) return;
+    const base = lineScore(label) + srcBonus;
+    for (const m of half(text).match(RE_MONEY) || []) {
+      const v = Number(m.replace(/,/g, ''));
+      if (!(v >= 10 && v <= 999999)) continue;
+      const sc = base + (m.indexOf(',') >= 0 ? 30 : 0) + Math.min(24, String(v).length * 4);
+      if (!cands.has(v) || cands.get(v) < sc) cands.set(v, sc);
+    }
+  };
+  const labelAt = y => {
+    const l = jpLines.find(o => y >= o.y0 - 6 && y <= o.y1 + 6);
+    return l ? l.text : '';
+  };
+
+  // 英語で読んだ数字（数字はこちらのほうが正確）
+  for (const ln of eachLine(enData)) {
+    const label = labelAt((ln.y0 + ln.y1) / 2) || ln.text;
+    addAll(ln.text, label, 15);
+    for (const w of ln.words) addAll(w.text, labelAt((w.bbox.y0 + w.bbox.y1) / 2) || label, 15);
+  }
+  // 日本語側の数字も、控えめに候補へ入れておく
+  for (const ln of jpLines) addAll(ln.text, ln.text, 0);
+
+  // 「402」と「2402」のように上のけたが落ちた読みは、長いほうにまとめる
+  const keys = [...cands.keys()];
+  for (const a of keys) {
+    const sa = String(a);
+    for (const b of keys) {
+      const sb = String(b);
+      if (b !== a && sb.length > sa.length && sb.length - sa.length <= 2 && sb.endsWith(sa))
+        cands.set(b, Math.max(cands.get(b), cands.get(a) + 5));
+    }
+  }
+
+  // 上位のものの一部だけを読みそこねた数（10479 に対する 479 や 10）は候補から外す
+  const amounts = [];
+  for (const [v] of [...cands.entries()].sort((x, y) => y[1] - x[1] || y[0] - x[0])) {
+    const sv = String(v);
+    if (amounts.some(k => {
+      const sk = String(k);
+      return sk.length > sv.length && (sk.endsWith(sv) || sk.startsWith(sv));
+    })) continue;
+    amounts.push(v);
+    if (amounts.length === 4) break;
+  }
+  return { amounts, cat: detectCategory(whole) || DEFAULT_CAT };
+}
+
+async function ocrReceipt(canvas, setStep) {
+  const [wj, we] = await getTessWorkers();
+  setStep('文字を読んでいます', 0.45);
+  const jp = await wj.recognize(canvas, {}, { text: true, blocks: true });
+  setStep('金額を読んでいます', 0.75);
+  const en = await we.recognize(canvas, {}, { text: true, blocks: true });
+  return readReceipt(jp.data, en.data);
+}
+
+/* ---- 画面まわり ---- */
+function openCamera() {
+  if (!window.WebAssembly) { openOcrUnavailable(); return; }
+  const input = $('shot');
+  input.value = '';
+  input.onchange = () => {
+    const f = input.files && input.files[0];
+    input.onchange = null;
+    if (f) runOcr(f);
+  };
+  input.click();   // 押したその場でひらく（iPhone でも動くように）
+}
+
+function openOcrUnavailable() {
+  openSheet(`
+    <h2>この端末ではレシートの読み取りが使えません</h2>
+    <p class="sheet-lead">かわりに、手で入力してください。</p>
+    <button type="button" class="btn-go" data-act="manual">手で入力する</button>
+    <button type="button" class="btn-wide" data-act="close">やめる</button>
+  `);
+}
+
+async function runOcr(file) {
+  const runId = ++ocrRunId;
+  const first = !tessJpn;
+  openSheet(`
+    <h2>レシートを読んでいます</h2>
+    ${first ? '<div class="ocr-note">はじめてなので、じゅんびに少し時間がかかります。<br>Wi-Fi のあるところだと早く終わります。<br>つぎからは待ちません。</div>' : ''}
+    <p class="sheet-lead" id="ocrMsg">しばらくお待ちください</p>
+    <div class="ocr-bar"><i id="ocrBar"></i></div>
+    <button type="button" class="btn-wide" data-act="close">やめる</button>
+  `, () => { ocrRunId++; ocrProgress = null; });   // 「やめる」で結果を捨てる
+
+  let phase = 0;
+  const setStep = (msg, pct) => {
+    if (runId !== ocrRunId) return;
+    phase = Math.max(phase, pct);
+    const t = $('ocrMsg'), b = $('ocrBar');
+    if (t && msg) t.textContent = msg;
+    if (b) b.style.width = Math.round(Math.max(0, Math.min(1, phase)) * 100) + '%';
+  };
+  ocrProgress = m => {
+    const p = typeof m.progress === 'number' ? m.progress : 0;
+    if (m.status === 'recognizing text') setStep(null, phase + p * 0.001);
+    else setStep('じゅんびしています', Math.min(0.4, p * 0.4));
+  };
+
+  try {
+    setStep('写真を整えています', 0.05);
+    const img = await readImageFile(file);
+    if (runId !== ocrRunId) return;
+    const canvas = prepareImage(img);
+    if (runId !== ocrRunId) return;
+
+    const r = await ocrReceipt(canvas, setStep);
+    if (runId !== ocrRunId) return;
+
+    ocrProgress = null;
+    if (!r.amounts.length) { openOcrFailed(); return; }
+    openCandidates(r.amounts, r.cat);
+  } catch (err) {
+    if (runId !== ocrRunId) return;
+    ocrProgress = null;
+    openOcrFailed(true);
+  }
+}
+
+function openCandidates(amounts, cat) {
+  openSheet(`
+    <h2>この金額でいいですか？</h2>
+    ${amounts.map((v, i) =>
+      `<button type="button" class="amtbtn${i === 0 ? ' first' : ''}" data-amt="${v}">${fmt(v)}<small>円</small></button>`
+    ).join('')}
+    <button type="button" class="btn-wide" data-act="manual">この中にない（手で入力）</button>
+    <button type="button" class="btn-wide" data-act="close">やめる</button>
+  `);
+  el.sheet.querySelectorAll('.amtbtn').forEach(b => {
+    b.addEventListener('click', () => openCategory(Number(b.dataset.amt), cat));
+  });
+}
+
+function openOcrFailed(broken) {
+  openSheet(`
+    <h2>うまく読めませんでした</h2>
+    <div class="ocr-note">${broken
+      ? 'もう一度おためしください。'
+      : '明るいところで、レシート全体がまっすぐ入るように<br>うつすと読みやすくなります。'}</div>
+    <button type="button" class="btn-go" data-act="ocr-retry">もう一度うつす</button>
+    <button type="button" class="btn-wide" data-act="manual">手で入力する</button>
+    <button type="button" class="btn-wide" data-act="close">やめる</button>
+  `);
+}
+
 /* ---------------- LINEなどへ送る（画像2枚） ---------------- */
 const CREAM = '#FFF6E9', INK = '#2E2118', INK2 = '#6E5A48';
 const BAR_CUR = '#5FA03F', BAR_PREV = '#D7C7B0', HILIGHT = '#DE4E84';
@@ -834,7 +1152,8 @@ function onTap(ev) {
     case 'close':       closeSheet(); break;
     case 'manual':      stopVoice(); openManual(); break;
     case 'voice':       openVoice(); break;
-    case 'camera':      showToast('まだ使えません', 'つぎの段階で作ります', 2200); break;
+    case 'camera':      openCamera(); break;
+    case 'ocr-retry':   openCamera(); break;
     case 'delete':      openDeleteLast(); break;
     case 'delete-yes':  deleteLast(); break;
   }

@@ -209,6 +209,33 @@ img{display:block}
 .btn-go:disabled{opacity:.4}
 .btn-wide:active,.btn-del:active,.btn-danger:active,.btn-go:active{transform:translateY(2px)}
 
+/* 写真を選ぶ入力欄は見せない（画面の外に置く） */
+.offscreen{position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0}
+
+/* レシートを読んでいるあいだの進み具合 */
+.ocr-bar{
+  height:22px;border-radius:999px;background:#fff;border:3px solid var(--pink-strong);
+  overflow:hidden;margin:6px 0 10px;
+}
+.ocr-bar i{display:block;height:100%;width:0;background:var(--pink-strong);
+  border-radius:999px;transition:width .3s ease}
+.ocr-note{
+  text-align:left;background:#FFF3D6;border:3px solid #E0B44A;border-radius:14px;
+  padding:11px 13px;font-size:clamp(19px,calc(var(--u) * 2.8),22px);font-weight:700;
+  line-height:1.55;margin-bottom:8px;
+}
+/* 読み取れた金額の候補 */
+.amtbtn{
+  width:100%;min-height:clamp(74px,calc(var(--u) * 11),86px);border-radius:17px;
+  border:3px solid var(--ink);background:#fff;color:var(--ink);
+  font-size:clamp(30px,calc(var(--u) * 4.6),38px);font-weight:900;
+  display:flex;align-items:center;justify-content:center;gap:2px;
+  margin-bottom:10px;box-shadow:var(--sh);
+}
+.amtbtn.first{background:var(--green-pale);border-color:var(--green-deep);border-width:5px}
+.amtbtn small{font-size:.55em}
+.amtbtn:active{transform:translateY(2px);box-shadow:none}
+
 /* 金額の入力 */
 .amount-field{
   display:flex;align-items:center;justify-content:flex-end;gap:2px;
@@ -284,8 +311,8 @@ img{display:block}
 .toast{
   position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:70;
   background:rgba(46,33,24,.93);color:#fff;font-size:clamp(29px,calc(var(--u) * 4.6),36px);font-weight:900;
-  border-radius:22px;padding:22px 34px;text-align:center;line-height:1.3;
-  max-width:calc(100vw - 40px);
+  border-radius:22px;padding:22px 30px;text-align:center;line-height:1.3;
+  white-space:nowrap;max-width:calc(100vw - 24px);
 }
 .toast small{display:block;font-size:.6em;font-weight:800;margin-top:8px;opacity:.9}
 .toast.wide{white-space:normal}
