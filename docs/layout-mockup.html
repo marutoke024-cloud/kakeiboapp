@@ -304,5 +304,25 @@ const screens=[
 ];
 document.getElementById('row').innerHTML=screens.map(([t,s,h])=>
  `<div class="frame"><p class="cap">${t}<small>${s}</small></p><div class="phone">${h}</div></div>`).join('');
+
+/* 起動アニメを動かして見せる（モック用） */
+(function(){
+  const fill=document.querySelector('.mold .fill'),
+        meter=document.querySelector('.meter i'),
+        pct=document.querySelector('.pct');
+  if(!fill) return;
+  let t0=null;
+  function tick(t){
+    if(t0===null) t0=t;
+    const p=Math.min(1,(t-t0)/3000);
+    const e=p<.5 ? 2*p*p : 1-Math.pow(-2*p+2,2)/2;
+    fill.style.height=(e*104)+'%';
+    meter.style.width=(p*100)+'%';
+    pct.textContent=Math.round(p*100)+'%';
+    if(p>=1){ setTimeout(()=>{ t0=null; requestAnimationFrame(tick); },1100); return; }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+})();
 </script>
 </body></html>
