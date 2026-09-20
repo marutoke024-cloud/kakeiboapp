@@ -1,0 +1,19 @@
+{
+  "name": "かけい簿",
+  "short_name": "かけい簿",
+  "description": "生活費の支出だけを、大きな文字で記録するアプリ",
+  "lang": "ja",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FDE0E9",
+  "theme_color": "#FDE0E9",
+  "categories": ["finance", "utilities"],
+  "icons": [
+    { "src": "./assets/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./assets/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./assets/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
