@@ -109,14 +109,15 @@ img{display:block}
 
 .donut-labels{position:absolute;inset:0;pointer-events:none}
 .dlabel{
-  position:absolute;font-size:clamp(22px,calc(var(--u) * 3.5),29px);font-weight:900;
-  white-space:nowrap;pointer-events:auto;cursor:pointer;
-  padding:0 6px;border-radius:9px;background:rgba(255,246,233,.94);
+  position:absolute;transform:translate(-50%,-50%);
+  font-size:clamp(19px,calc(var(--u) * 2.9),25px);font-weight:900;
+  white-space:nowrap;pointer-events:auto;cursor:pointer;color:#fff;
+  padding:3px 11px;border-radius:999px;
+  box-shadow:0 1px 3px rgba(0,0,0,.3);
 }
-.app.past .dlabel{background:rgba(228,237,246,.94)}
 
 /* --- 下の段 --- */
-.foot{position:relative;height:calc(clamp(184px,calc(var(--u) * 24.8),214px) + var(--safeb))}
+.foot{position:relative;height:calc(clamp(184px,calc(var(--u) * 24.6),212px) + var(--safeb))}
 /* キャラクターの大きさは JS が、まわりのボタンに当たらないぎりぎりまで広げます */
 .chars{
   position:absolute;left:-10px;bottom:calc(10px + var(--safeb));
@@ -129,22 +130,22 @@ img{display:block}
   display:flex;flex-direction:column;align-items:flex-end;gap:14px;
 }
 .plus{
-  width:clamp(90px,calc(var(--u) * 14.4),114px);aspect-ratio:1;border-radius:50%;
+  width:clamp(104px,calc(var(--u) * 16.8),132px);aspect-ratio:1;border-radius:50%;
   background:var(--pink-strong);color:#fff;border:5px solid #fff;
   box-shadow:0 5px 0 rgba(150,40,80,.32),0 8px 18px rgba(0,0,0,.22);
   display:flex;flex-direction:column;align-items:center;justify-content:center;
-  font-weight:900;line-height:1;font-size:clamp(90px,calc(var(--u) * 14.4),114px);
+  font-weight:900;line-height:1;font-size:clamp(104px,calc(var(--u) * 16.8),132px);
 }
 .plus-p{font-size:.52em;margin-top:-.04em}
 .plus-t{font-size:.16em;margin-top:.05em}
 .plus:active{transform:translateY(4px);box-shadow:0 1px 0 rgba(150,40,80,.32)}
 .send{
-  min-height:68px;padding:0 15px;border-radius:15px;border:3px solid var(--green-deep);
+  min-height:46px;padding:0 12px;border-radius:12px;border:3px solid var(--green-deep);
   background:#fff;color:var(--green-deep);
-  font-size:clamp(22px,calc(var(--u) * 3.3),27px);font-weight:900;
-  display:flex;align-items:center;gap:6px;box-shadow:var(--sh);
+  font-size:clamp(16px,calc(var(--u) * 2.4),20px);font-weight:900;
+  display:flex;align-items:center;gap:4px;box-shadow:var(--sh);
 }
-.send svg{width:1.15em;height:1.15em}
+.send svg{width:1.1em;height:1.1em}
 .send:active{transform:translateY(2px);box-shadow:none}
 .viewonly{
   background:rgba(255,255,255,.94);border:2px solid var(--past-bar);color:var(--past-ink);
@@ -165,13 +166,13 @@ img{display:block}
   transform:translateY(calc(-1 * var(--kb)));
   transition:transform .18s ease;
 }
-.sheet h2{font-size:clamp(25px,calc(var(--u) * 3.8),32px);font-weight:900;text-align:center;margin:2px 0 13px}
-.sheet-lead{text-align:center;font-size:clamp(22px,calc(var(--u) * 3.4),27px);font-weight:800;color:var(--ink2);margin:0 0 10px}
+.sheet h2{font-size:clamp(22px,calc(var(--u) * 3.2),27px);font-weight:900;text-align:center;margin:2px 0 13px}
+.sheet-lead{text-align:center;font-size:clamp(21px,calc(var(--u) * 3.1),25px);font-weight:800;color:var(--ink2);margin:0 0 10px}
 
 /* 入力方法の3つのボタン */
 .opt{
   width:100%;min-height:clamp(80px,calc(var(--u) * 12.4),98px);border-radius:17px;border:3px solid var(--ink);
-  background:#fff;color:var(--ink);font-size:clamp(24px,calc(var(--u) * 3.7),30px);font-weight:900;
+  background:#fff;color:var(--ink);font-size:clamp(22px,calc(var(--u) * 3.2),26px);font-weight:900;
   display:flex;align-items:center;gap:13px;padding:12px 15px;margin-bottom:10px;
   box-shadow:var(--sh);text-align:left;line-height:1.2;
 }
@@ -271,6 +272,12 @@ img{display:block}
 }
 .amount-field .unit{font-size:clamp(28px,calc(var(--u) * 4),34px);font-weight:900}
 
+.sheet-amount{
+  text-align:center;font-weight:900;line-height:1.1;margin:0 0 2px;
+  font-size:clamp(34px,calc(var(--u) * 5.4),46px);
+}
+.sheet-amount small{font-size:.52em;font-weight:800}
+
 /* カテゴリのボタン */
 .catgrid{display:flex;flex-direction:column;gap:9px}
 .catbtn{
@@ -310,7 +317,7 @@ img{display:block}
   display:flex;flex-direction:column;align-items:center;justify-content:center;
   padding:22px calc(22px + env(safe-area-inset-left,0px)) calc(22px + var(--safeb));gap:4px;
 }
-.confirm-q{font-size:clamp(24px,calc(var(--u) * 3.7),31px);font-weight:800;color:var(--ink2)}
+.confirm-q{font-size:clamp(22px,calc(var(--u) * 3.4),28px);font-weight:800;color:var(--ink2)}
 .confirm-big{font-size:clamp(64px,calc(var(--u) * 11.4),98px);font-weight:900;line-height:1.05}
 .confirm-big small{font-size:.44em}
 .confirm-cat{

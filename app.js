@@ -46,7 +46,7 @@ function saveEntries(list) {
   catch (_) { return false; }
 }
 
-/* 「なにに使ったか」の短い名前をそろえる */
+/* 「何に使ったか」の短い名前をそろえる */
 function cleanNote(v) {
   return String(v == null ? '' : v).replace(/[\r\n\t]+/g, ' ').trim().slice(0, 20);
 }
@@ -176,7 +176,7 @@ function fitCenter() {
 function layoutDonut() {
   const box = el.donut.getBoundingClientRect();
   if (!box.width || !box.height) return;
-  const S = Math.max(140, Math.min(box.width - 20, box.height - 16));
+  const S = Math.max(140, Math.min(box.width - 16, box.height - 14));
   donutS = S;
   const svg = $('ring');
   svg.setAttribute('width', S);
@@ -195,37 +195,61 @@ function layoutDonut() {
   const cx = box.width / 2, cy = marginTop + S / 2;
   el.donutCenter.style.top = cy + 'px';
 
-  // ③ カテゴリ名を輪のまわりに置く
+  // ③ カテゴリ名は、輪の上に札として乗せる
   el.donutLabels.innerHTML = lastMids.map(o =>
-    `<span class="dlabel" data-cat="${o.key}" style="color:${lastIsPast ? PAST_LABEL_COLOR : CAT_COLOR[o.key].text}">${CAT_NAME[o.key]}</span>`
+    `<span class="dlabel" data-cat="${o.key}" style="background:${
+      lastIsPast ? PAST_LABEL_COLOR : CAT_COLOR[o.key].text}">${CAT_NAME[o.key]}</span>`
   ).join('');
 
-  const R = (RING.prevR + RING.prevW / 2 + 5) / 100 * S;   // 輪のすぐ外がわ
-  const placed = [...el.donutLabels.children].map((n, i) => {
-    const a = lastMids[i].angle * Math.PI / 180;
-    const w = n.offsetWidth, h = n.offsetHeight;
-    const co = Math.cos(a), si = Math.sin(a);
-    // 輪の外へ逃がす置きかた（真上・真下では中央ぞろえ、左右では外ぞろえになる）
-    const x = cx + co * (R + w / 2) - w / 2;
-    const y = cy + si * (R + h / 2) - h / 2;
-    return {
-      n, w, h, right: co >= 0,
-      x: Math.min(Math.max(2, x), Math.max(2, box.width - w - 2)),
-      y: Math.min(Math.max(0, y), Math.max(0, box.height - h)),
-    };
-  });
-  for (const side of [true, false]) {          // 左右それぞれで重なりをほどく
-    const g = placed.filter(o => o.right === side).sort((p, q) => p.y - q.y);
-    for (let i = 1; i < g.length; i++) {
-      const min = g[i - 1].y + g[i - 1].h + 4;
-      if (g[i].y < min) g[i].y = min;
+  const Rl = (RING.curR + 1.4) / 100 * S;      // 太い輪の上（少し外より）
+  const items = [...el.donutLabels.children].map((n, i) => ({
+    n, ang: lastMids[i].angle * Math.PI / 180,
+    w: n.offsetWidth, h: n.offsetHeight,
+    half: (n.offsetWidth / 2 + 5) / Rl,        // 必要な角度のはば
+  }));
+  // まんなかの合計にかぶらないよう、真横ちかく（左右）はよけて置く
+  const SIDE = 0.36;                            // 真横から約21度ぶん
+  const avoidSides = o => {
+    const si = Math.sin(o.ang), co = Math.cos(o.ang);
+    if (Math.abs(si) >= SIDE) return;
+    const up = si >= 0 ? 1 : -1;
+    const a = Math.asin(SIDE) * up;
+    o.ang = co >= 0 ? a : Math.PI - a;
+  };
+  if (items.length > 1) {
+    const need = items.reduce((t, o) => t + o.half * 2, 0);
+    if (need >= Math.PI * 2 - 0.05) {
+      const step = Math.PI * 2 / items.length; // 入りきらないときは等間かくに
+      items.forEach((o, i) => { o.ang = -Math.PI / 2 + step * i; });
+    } else {
+      items.forEach(avoidSides);
+      items.sort((a, b) => a.ang - b.ang);
+      for (let pass = 0; pass < 40; pass++) {  // 輪にそって押し広げて重なりをほどく
+        let moved = false;
+        for (let i = 0; i < items.length; i++) {
+          const a = items[i], b = items[(i + 1) % items.length];
+          let gap = b.ang - a.ang;
+          while (gap < 0) gap += Math.PI * 2;
+          const room = a.half + b.half;
+          if (gap < room - 1e-4) {
+            const push = (room - gap) / 2;
+            a.ang -= push; b.ang += push;
+            moved = true;
+          }
+        }
+        items.forEach(avoidSides);
+        if (!moved) break;
+      }
     }
-    if (g.length) {
-      const over = g[g.length - 1].y + g[g.length - 1].h - box.height;
-      if (over > 0) for (const o of g) o.y = Math.max(0, o.y - over);
-    }
+  } else if (items.length === 1) {
+    avoidSides(items[0]);
   }
-  for (const o of placed) { o.n.style.left = o.x + 'px'; o.n.style.top = o.y + 'px'; }
+  for (const o of items) {
+    const x = cx + Math.cos(o.ang) * Rl;
+    const y = cy + Math.sin(o.ang) * Rl;
+    o.n.style.left = Math.min(Math.max(o.w / 2 + 2, x), box.width - o.w / 2 - 2) + 'px';
+    o.n.style.top  = Math.min(Math.max(o.h / 2 + 1, y), box.height - o.h / 2 - 1) + 'px';
+  }
 
   fitCenter();
 }
@@ -282,7 +306,7 @@ function openBreakdown(cat) {
         <span class="bd-name">${escapeHtml(e.n || CAT_NAME[e.c])}</span>
         <span class="bd-amt">${fmt(e.a)}<small>円</small></span>
       </div>`).join('')}</div>` : '<p class="bd-prev">まだありません</p>'}
-    <button type="button" class="btn-wide" data-act="close">とじる</button>
+    <button type="button" class="btn-wide" data-act="close">閉じる</button>
   `);
 }
 
@@ -387,11 +411,11 @@ function openAddMenu() {
     <button type="button" class="opt one" data-act="camera">${SVG.cam}
       <span>カメラで<br>レシートを読み取る<small>合計の金額を読み取ります</small></span></button>
     <button type="button" class="opt two" data-act="voice" style="color:var(--green-deep)">${SVG.mic}
-      <span style="color:var(--ink)">声で入力する<small>「電気代 5000円」のように話します</small></span></button>
+      <span style="color:var(--ink)">声で入力する<small>「電気代 5000円」と話します</small></span></button>
     <button type="button" class="opt" data-act="manual">${SVG.hand}
       <span>手で入力する<small>数字を打ちます</small></span></button>
-    <button type="button" class="btn-del" data-act="delete">さいごの入力を消す</button>
-    <button type="button" class="btn-wide" data-act="close">とじる</button>
+    <button type="button" class="btn-del" data-act="delete">最後の入力を消す</button>
+    <button type="button" class="btn-wide" data-act="close">閉じる</button>
   `);
 }
 
@@ -443,7 +467,8 @@ function digitsOf(s) {
 function openCategory(amount, selected) {
   const sel = selected || DEFAULT_CAT;
   openSheet(`
-    <p class="sheet-lead">${fmt(amount)}円は何に使いましたか？</p>
+    <p class="sheet-amount">${fmt(amount)}<small>円</small></p>
+    <p class="sheet-lead">何に使いましたか？</p>
     <div class="catgrid">
       ${CATS.map(c => `<button type="button" class="catbtn${c.key === sel ? ' sel' : ''}"
           data-cat="${c.key}">${SVG[c.key]}${c.name}</button>`).join('')}
@@ -484,7 +509,7 @@ function addEntry(amount, cat, note) {
                  d: todayISO(), c: cat, a: amount, n: cleanNote(note) });
   if (!saveEntries(entries)) {
     entries.pop();
-    showToast('保存できませんでした', 'もう一度おためしください', 2600);
+    showToast('保存できませんでした', 'もう一度お試しください', 2600);
     return;
   }
   refreshCurrentMonth();
@@ -494,7 +519,7 @@ function addEntry(amount, cat, note) {
   showToast('保存しました', `${n || CAT_NAME[cat]} ${fmt(amount)}円`, 1900);
 }
 
-/* ---------------- さいごの入力を消す ---------------- */
+/* ---------------- 最後の入力を消す ---------------- */
 function openDeleteLast() {
   const last = entries[entries.length - 1];
   if (!last) {
@@ -557,11 +582,11 @@ function openVoice() {
     recog = null;
     if (ev.error === 'aborted') return;
     if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
-      openVoiceUnavailable('マイクを使う許可がありません。');
+      openVoiceUnavailable('マイクが使えません');
     } else if (ev.error === 'no-speech') {
-      openVoiceRetry('声が聞こえませんでした。');
+      openVoiceRetry('声が聞こえませんでした');
     } else {
-      openVoiceUnavailable('声の入力がうまく動きませんでした。');
+      openVoiceUnavailable('声の入力がうまく動きませんでした');
     }
   };
   recog.onend = () => {
@@ -593,12 +618,12 @@ function openVoiceRetry(msg) {
 /* 端末が声の入力に対応していないとき（キーボードのマイクの案内） */
 function openVoiceUnavailable(msg) {
   openSheet(`
-    <h2>${msg || 'この端末では声の入力が使えません'}</h2>
+    <h2>${msg || '声の入力が使えません'}</h2>
     <div class="mic-help">
-      かわりに、こうすると声で入れられます。<br>
+      代わりに、次の方法で声を使えます。<br>
       ① 下の<b>「手で入力する」</b>を押す<br>
       ② 数字のキーボードが出る<br>
-      ③ キーボードの<b>マイクの絵</b>を押して、金額を話す
+      ③ キーボードの<b>マイクのマーク</b>を押して、金額を話す
     </div>
     <button type="button" class="btn-go" data-act="manual">手で入力する</button>
     <button type="button" class="btn-wide" data-act="close">やめる</button>
@@ -623,7 +648,7 @@ function parseSpeech(text) {
   for (const chunk of cleaned.match(/[0-9〇零一壱二弐三参四五六七八九十百千万億]+/g) || []) {
     amount = Math.max(amount, toNumber(chunk));
   }
-  // 金額とカテゴリ名をのぞいた言葉を「なにに使ったか」として残す
+  // 金額とカテゴリ名をのぞいた言葉を「何に使ったか」として残す
   const note = cleaned
     .replace(/[0-9〇零一壱二弐三参四五六七八九十百千万億]+/g, '')
     .replace(/円|えん/g, '')
@@ -651,7 +676,7 @@ function toNumber(str) {
 }
 
 /* ---------------- 入力：カメラでレシートを読み取る ---------------- */
-/* Google Gemini（無料わく）に写真をわたして、支払った金額と種類をひとつだけ返してもらいます。
+/* Google Gemini（無料枠）に写真をわたして、支払った金額と種類をひとつだけ返してもらいます。
    APIキーはこの端末の中だけに入れておき、写真は読み取りのときだけ Google に送られます。 */
 const GKEY_STORE  = 'kakeibo.gemini.key';
 const GMODEL_STORE = 'kakeibo.gemini.model';
@@ -676,7 +701,7 @@ function httpError(status, body) {
   return e;
 }
 
-/* この鍵で使える、いちばん新しい Flash（無料わく）を選ぶ */
+/* この鍵で使える、いちばん新しい Flash（無料枠）を選ぶ */
 async function pickModel(key, again) {
   if (!again) {
     const saved = readStore(GMODEL_STORE);
@@ -857,9 +882,9 @@ function openOcrFailed(broken) {
   openSheet(`
     <h2>うまく読めませんでした</h2>
     <div class="ocr-note">${broken
-      ? 'もう一度おためしください。'
-      : '明るいところで、レシート全体がまっすぐ入るように<br>うつすと読みやすくなります。'}</div>
-    <button type="button" class="btn-go" data-act="camera">もう一度うつす</button>
+      ? 'もう一度お試しください。'
+      : '明るいところで、レシート全体がまっすぐ入るように<br>写すと読みやすくなります。'}</div>
+    <button type="button" class="btn-go" data-act="camera">もう一度写す</button>
     <button type="button" class="btn-wide" data-act="manual">手で入力する</button>
     <button type="button" class="btn-wide" data-act="close">やめる</button>
   `);
@@ -867,9 +892,9 @@ function openOcrFailed(broken) {
 
 function openCameraOffline() {
   openSheet(`
-    <h2>ネットにつながっていません</h2>
+    <h2>ネットにつながりません</h2>
     <div class="ocr-note">レシートの読み取りには、インターネットが必要です。<br>
-      Wi-Fi のあるところでおためしください。</div>
+      Wi-Fi のある場所でお試しください。</div>
     <button type="button" class="btn-go" data-act="manual">手で入力する</button>
     <button type="button" class="btn-wide" data-act="close">やめる</button>
   `);
@@ -877,8 +902,8 @@ function openCameraOffline() {
 
 function openQuotaOver() {
   openSheet(`
-    <h2>きょうのぶんを使い切りました</h2>
-    <div class="ocr-note">レシートの読み取りは、あすまた使えます。</div>
+    <h2>今日の分を使い切りました</h2>
+    <div class="ocr-note">レシートの読み取りは、明日また使えます。</div>
     <button type="button" class="btn-go" data-act="manual">手で入力する</button>
     <button type="button" class="btn-wide" data-act="close">やめる</button>
   `);
@@ -886,8 +911,8 @@ function openQuotaOver() {
 
 function openKeyNeeded() {
   openSheet(`
-    <h2>カメラの準備がまだです</h2>
-    <div class="ocr-note">レシートの読み取りを使うには、はじめに設定が必要です。<br>
+    <h2>カメラの設定がまだです</h2>
+    <div class="ocr-note">レシートの読み取りを使うには、最初に設定が必要です。<br>
       ご家族の方に設定してもらってください。</div>
     <button type="button" class="btn-go" data-act="settings">設定する</button>
     <button type="button" class="btn-wide" data-act="manual">手で入力する</button>
@@ -898,7 +923,7 @@ function openKeyNeeded() {
 function openKeyBad() {
   openSheet(`
     <h2>設定が正しくないようです</h2>
-    <div class="ocr-note">読み取りの設定（APIキー）をもう一度たしかめてください。</div>
+    <div class="ocr-note">読み取りの設定（APIキー）をもう一度ご確認ください。</div>
     <button type="button" class="btn-go" data-act="settings">設定を見る</button>
     <button type="button" class="btn-wide" data-act="manual">手で入力する</button>
     <button type="button" class="btn-wide" data-act="close">やめる</button>
@@ -912,34 +937,34 @@ function openSettings() {
   openSheet(`
     <h2>カメラの設定</h2>
     <div class="ocr-note">
-      レシートの読み取りに Google Gemini（無料わく）を使います。<br>
+      レシートの読み取りに Google Gemini（無料枠）を使います。<br>
       ① <b>aistudio.google.com/apikey</b> で API キーを作る<br>
-      ② 下に貼りつけて「保存する」<br>
+      ② 下に貼り付けて「保存する」<br>
       キーはこの端末の中だけに保存します。
     </div>
     <input id="gkey" class="keyfield" type="text" autocomplete="off" autocorrect="off"
            spellcheck="false" placeholder="AIza..." value="${key.replace(/"/g, '&quot;')}">
     <p class="sheet-lead" id="gmsg">${key
-      ? '設定ずみです' + (model ? `（${model}）` : '')
+      ? '設定済みです' + (model ? `（${model}）` : '')
       : 'まだ設定されていません'}</p>
     <button type="button" class="btn-go" id="gsave">保存する</button>
     ${key ? '<button type="button" class="btn-del" data-act="key-clear">設定を消す</button>' : ''}
-    <button type="button" class="btn-wide" data-act="close">とじる</button>
+    <button type="button" class="btn-wide" data-act="close">閉じる</button>
   `);
   const input = $('gkey'), msg = $('gmsg'), save = $('gsave');
   save.addEventListener('click', async () => {
     const k = input.value.trim();
-    if (!k) { msg.textContent = 'キーを貼りつけてください'; return; }
+    if (!k) { msg.textContent = 'キーを貼り付けてください'; return; }
     writeStore(GKEY_STORE, k);
     writeStore(GMODEL_STORE, '');
     save.disabled = true;
-    msg.textContent = 'たしかめています…';
+    msg.textContent = '確かめています…';
     try {
       const m = await pickModel(k, true);
       msg.textContent = `使えます（${m}）`;
     } catch (err) {
       msg.textContent = (err && (err.status === 400 || err.status === 403))
-        ? 'このキーは使えないようです' : 'たしかめられませんでした（ネットの状態をご確認ください）';
+        ? 'このキーは使えないようです' : '確かめられませんでした（通信の状態をご確認ください）';
     }
     save.disabled = false;
   });
@@ -1132,9 +1157,9 @@ async function doShare() {
 function shareFailed(files) {
   openSheet(`
     <h2>うまく送れませんでした</h2>
-    <p class="sheet-lead">もう一度おためしください。</p>
+    <p class="sheet-lead">もう一度お試しください。</p>
     ${files ? '<button type="button" class="btn-go" data-act="save-images">画像を保存する</button>' : ''}
-    <button type="button" class="btn-wide" data-act="close">とじる</button>
+    <button type="button" class="btn-wide" data-act="close">閉じる</button>
   `);
   if (files) {
     el.sheet.querySelector('[data-act="save-images"]').addEventListener('click', () => {
