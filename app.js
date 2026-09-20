@@ -84,6 +84,7 @@ const el = {
   app: $('app'), totalLabel: $('totalLabel'),
   legendCur: $('legendCur'), legendPrev: $('legendPrev'),
   donut: $('donut'), donutCenter: $('donutCenter'), donutLabels: $('donutLabels'), noData: $('noData'),
+  foot: document.querySelector('.foot'), chars: document.querySelector('.chars'),
   btnPrev: $('btnPrev'), btnNow: $('btnNow'), btnAdd: $('btnAdd'), btnShare: $('btnShare'),
   viewOnly: $('viewOnly'), scrim: $('scrim'), sheet: $('sheet'),
   confirm: $('confirm'), toast: $('toast'),
@@ -241,6 +242,30 @@ function layoutDonut() {
 
   fitCenter();
   applyDim();
+  layoutChars();
+}
+
+/* キャラクターを、まわりのボタンや文字に当たらないぎりぎりまで大きくする */
+function layoutChars() {
+  const img = el.chars;
+  if (!img || !img.naturalWidth) return;
+  const app = el.app.getBoundingClientRect();
+  const visible = e => e && !e.hidden && e.getBoundingClientRect().width > 0;
+
+  // 右がわの限界：「＋」「送る」「見るだけの画面です」より左
+  let right = app.right - 8;
+  for (const e of [el.btnAdd, el.btnShare, el.viewOnly])
+    if (visible(e)) right = Math.min(right, e.getBoundingClientRect().left - 6);
+
+  // 上がわの限界：「まだありません」の行があればその下、なければ輪の下まで使える
+  const nd = visible(el.noData) ? el.noData.getBoundingClientRect() : null;
+  const top = nd ? nd.bottom + 2 : $('ring').getBoundingClientRect().bottom + 8;
+
+  // 下の端は CSS が安全域（iPhone のホームバーぶん）を引いた位置に置いてくれている
+  const bottom = img.getBoundingClientRect().bottom;
+  const left = app.left - 10;                       // 左は少しだけ画面の外へ
+  const w = Math.min(right - left, (bottom - top) * (img.naturalWidth / img.naturalHeight));
+  if (w > 60) img.style.width = Math.round(w) + 'px';
 }
 
 function selectCat(key) {
@@ -1208,6 +1233,7 @@ function init() {
 
   // 円グラフをタップすると、そのカテゴリの金額をまんなかに出す
   el.donut.addEventListener('click', onDonutTap);
+  if (el.chars) el.chars.addEventListener('load', layoutChars);
   el.noData.addEventListener('click', ev => {
     const n = ev.target.closest('.nochip');
     if (n) selectCat(n.dataset.cat);

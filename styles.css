@@ -130,13 +130,14 @@ img{display:block}
 .app.past .nochip{border-color:#A8C2D4;color:#4E748E}
 
 /* --- 下の段 --- */
-.foot{position:relative;height:calc(clamp(116px,calc(var(--u) * 19),158px) + var(--safeb))}
+.foot{position:relative;height:calc(clamp(164px,calc(var(--u) * 20.6),180px) + var(--safeb))}
+/* キャラクターの大きさは JS が、まわりのボタンに当たらないぎりぎりまで広げます */
 .chars{
-  position:absolute;left:-10px;bottom:var(--safeb);width:clamp(134px,calc(var(--u) * 22),174px);
-  height:auto;pointer-events:none;filter:drop-shadow(0 3px 5px rgba(0,0,0,.13));
+  position:absolute;left:-10px;bottom:var(--safeb);width:clamp(140px,calc(var(--u) * 24),210px);
+  height:auto;pointer-events:none;z-index:1;filter:drop-shadow(0 3px 6px rgba(0,0,0,.15));
 }
 .plus{
-  position:absolute;bottom:calc(4px + var(--safeb));left:56%;transform:translateX(-50%);
+  position:absolute;bottom:calc(4px + var(--safeb));right:12px;
   width:clamp(84px,calc(var(--u) * 13.4),100px);aspect-ratio:1;border-radius:50%;
   background:var(--pink-strong);color:#fff;border:5px solid #fff;
   box-shadow:0 5px 0 rgba(150,40,80,.32),0 8px 18px rgba(0,0,0,.22);
@@ -145,7 +146,7 @@ img{display:block}
 }
 .plus-p{font-size:.52em;margin-top:-.04em}
 .plus-t{font-size:.16em;margin-top:.05em}
-.plus:active{transform:translateX(-50%) translateY(4px);box-shadow:0 1px 0 rgba(150,40,80,.32)}
+.plus:active{transform:translateY(4px);box-shadow:0 1px 0 rgba(150,40,80,.32)}
 .send{
   position:absolute;right:8px;top:1px;min-height:64px;padding:0 16px;
   border-radius:15px;border:3px solid var(--green-deep);background:#fff;color:var(--green-deep);
@@ -327,16 +328,19 @@ img{display:block}
 .splash-name{
   font-size:clamp(31px,calc(var(--u) * 5),40px);font-weight:900;color:#8E3A5C;letter-spacing:.06em;
 }
-.mold{position:relative;width:min(70vw,280px);aspect-ratio:760/616}
+.mold{
+  position:relative;aspect-ratio:1086/1448;
+  height:min(54vh,430px,calc(76vw * 1448 / 1086));
+}
 .mold-ghost,.mold-real{
-  position:absolute;inset:0;background:url(./assets/chars.png) no-repeat center/contain;
+  position:absolute;inset:0;background:url(./assets/chars-tall.png) no-repeat center/contain;
 }
 .mold-ghost{opacity:.26;filter:grayscale(1) brightness(.45) contrast(1.3)}
 .mold-real{opacity:0;transition:opacity .5s ease}
 .mold-real.show{opacity:1}
 .mold-liquid{
   position:absolute;inset:0;overflow:hidden;
-  -webkit-mask-image:url(./assets/chars.png);mask-image:url(./assets/chars.png);
+  -webkit-mask-image:url(./assets/chars-tall.png);mask-image:url(./assets/chars-tall.png);
   -webkit-mask-size:contain;mask-size:contain;
   -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
   -webkit-mask-position:center;mask-position:center;
