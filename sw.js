@@ -3,7 +3,7 @@
    アプリ本体（index.html / app.js / styles.css / manifest）は「まずネット」。
    こうしないと、直したものが端末に届かないため。
    絵やアイコンは変わらないので「まずキャッシュ」。 */
-const VERSION = 'v5';
+const VERSION = 'v6';
 const CACHE = 'kakeibo-' + VERSION;
 
 const CODE = /(?:^|\/)(?:index\.html|app\.js|styles\.css|manifest\.webmanifest)$/;

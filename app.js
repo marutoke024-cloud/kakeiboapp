@@ -5,7 +5,7 @@
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '2026-09-20 (5)';
+const APP_VERSION = '2026-09-20 (6)';
 
 /* ---------------- カテゴリ ---------------- */
 const CATS = [
@@ -60,10 +60,30 @@ let entries = loadEntries();
 /* ---------------- 日付 ---------------- */
 const pad2 = n => String(n).padStart(2, '0');
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; };
-const thisYM   = () => todayISO().slice(0, 7);
-const ymOf     = iso => iso.slice(0, 7);
 const monthNum = ym => Number(ym.slice(5, 7));
 const yearNum  = ym => Number(ym.slice(0, 4));
+
+/* 1か月の区切り。毎月この日から、次の月のこの日の前日までを「1か月」とします */
+const CYCLE_DAY = 20;
+
+/* その日がどの月に入るかを返す（9月20日〜10月19日はどちらも「9月」） */
+function cycleOf(iso) {
+  const y = Number(iso.slice(0, 4)), m = Number(iso.slice(5, 7)), d = Number(iso.slice(8, 10));
+  const back = d < CYCLE_DAY ? -1 : 0;
+  const dt = new Date(y, m - 1 + back, 1);
+  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}`;
+}
+const ymOf   = cycleOf;
+const thisYM = () => cycleOf(todayISO());
+
+/* その月が、何日から何日までかを返す */
+function cycleRange(ym) {
+  const y = yearNum(ym), m = monthNum(ym);
+  return { from: new Date(y, m - 1, CYCLE_DAY), to: new Date(y, m, CYCLE_DAY - 1) };
+}
+const mdText = dt => `${dt.getMonth() + 1}/${dt.getDate()}`;
+const cycleLabel = ym => { const r = cycleRange(ym); return `${mdText(r.from)}〜${mdText(r.to)}`; };
+const cycleFrom  = ym => `${mdText(cycleRange(ym).from)}〜`;
 
 function addMonths(ym, diff) {
   const y = yearNum(ym), m = monthNum(ym) - 1 + diff;
@@ -158,8 +178,10 @@ function drawRings(cur, prev) {
 /* まんなかの文字 */
 function paintCenter() {
   const tag = lastIsPast ? '<span class="past-tag">過去の記録</span>' : '';
-  el.totalLabel.innerHTML = `${monthNum(viewYM)}月支出合計${tag}`;
-  el.donutCenter.innerHTML = `<span class="dc-big">${fmt(sumOf(lastCur))}<small>円</small></span>`;
+  el.totalLabel.innerHTML = `${cycleLabel(viewYM)}${tag}`;
+  el.donutCenter.innerHTML =
+    `<span class="dc-cap">支出合計</span>` +
+    `<span class="dc-big">${fmt(sumOf(lastCur))}<small>円</small></span>`;
   fitCenter();
 }
 
@@ -210,7 +232,7 @@ function layoutDonut() {
     half: (n.offsetWidth / 2 + 5) / Rl,        // 必要な角度のはば
   }));
   // まんなかの合計にかぶらないよう、真横ちかく（左右）はよけて置く
-  const SIDE = 0.36;                            // 真横から約21度ぶん
+  const SIDE = 0.46;                            // 真横から約27度ぶん
   const avoidSides = o => {
     const si = Math.sin(o.ang), co = Math.cos(o.ang);
     if (Math.abs(si) >= SIDE) return;
@@ -297,11 +319,12 @@ function openBreakdown(cat) {
   const color = lastIsPast ? PAST_LABEL_COLOR : CAT_COLOR[cat].text;
 
   openSheet(`
-    <h2 style="color:${color}">${monthNum(ym)}月の${CAT_NAME[cat]}</h2>
+    <h2 style="color:${color}">${CAT_NAME[cat]}</h2>
+    <p class="bd-range">${cycleLabel(ym)}</p>
     <div class="bd-total">${fmt(total)}<small>円</small></div>
     <p class="bd-prev">${prev > 0
-      ? `${monthNum(pm)}月は ${fmt(prev)}円`
-      : `${monthNum(pm)}月は ありません`}</p>
+      ? `前は（${cycleLabel(pm)}）${fmt(prev)}円`
+      : `前は（${cycleLabel(pm)}）ありません`}</p>
     ${rows.length ? `<div class="bd-list">${rows.map(e => `
       <div class="bd-row">
         <span class="bd-day">${Number(e.d.slice(5, 7))}/${Number(e.d.slice(8, 10))}</span>
@@ -349,8 +372,8 @@ function render() {
 
   document.body.classList.toggle('is-past', isPast);
   el.app.classList.toggle('past', isPast);
-  el.legendCur.textContent  = monthNum(viewYM) + '月';
-  el.legendPrev.textContent = monthNum(addMonths(viewYM, -1)) + '月';
+  el.legendCur.textContent  = cycleFrom(viewYM);
+  el.legendPrev.textContent = cycleFrom(addMonths(viewYM, -1));
 
   lastMids = drawRings(lastCur, lastPrev);
   paintCenter();
@@ -1037,11 +1060,14 @@ function drawMonthImage(ym) {
   const rowH = 96, H = 820 + rowH * CATS.length + 250;
   const { c, x } = newCanvas(W, H);
   const d = new Date();
-  const upto = ym === thisYM() ? `${monthNum(ym)}月${d.getDate()}日まで` : `${monthNum(ym)}月ぜんぶ`;
+  const range = cycleRange(ym);
+  const upto = ym === thisYM()
+    ? `${d.getMonth() + 1}月${d.getDate()}日までの分`
+    : 'この期間すべて';
 
   x.textAlign = 'left';
   setFont(x, 78, 900); x.fillStyle = INK;
-  x.fillText(`${yearNum(ym)}年 ${monthNum(ym)}月の記録`, PAD, 150);
+  x.fillText(`${yearNum(ym)}年 ${cycleLabel(ym)} の記録`, PAD, 150);
   setFont(x, 46, 800); x.fillStyle = INK2;
   x.fillText(upto, PAD, 214);
 
@@ -1105,16 +1131,16 @@ function drawYearImage(year) {
   x.textAlign = 'left'; setFont(x, 78, 900); x.fillStyle = INK;
   x.fillText(`${year}年の記録`, PAD, 150);
   setFont(x, 44, 800); x.fillStyle = INK2;
-  x.fillText('1月から12月までの支出', PAD, 212);
+  x.fillText(`${CYCLE_DAY}日はじまりの1か月ごと`, PAD, 212);
 
-  const labelW = 120, amtW = 250;
+  const labelW = 190, amtW = 250;
   const track = W - PAD * 2 - labelW - amtW;
   let y = 280;
   for (const o of months) {
     const isNow = o.ym === nowYM;
     if (isNow) { x.fillStyle = '#FDE0E9'; roundRect(x, PAD - 14, y - 6, W - PAD * 2 + 28, rowH - 10, 20); x.fill(); }
     x.textAlign = 'left'; setFont(x, 50, 900); x.fillStyle = isNow ? '#B33E6B' : INK;
-    x.fillText(`${o.m}月`, PAD, y + 56);
+    x.fillText(cycleFrom(o.ym), PAD, y + 56);
     x.fillStyle = '#EFE4D3'; roundRect(x, PAD + labelW, y + 24, track, 38, 19); x.fill();
     if (o.total > 0) {
       x.fillStyle = isNow ? HILIGHT : BAR_CUR;
