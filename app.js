@@ -5,6 +5,8 @@
    ============================================================ */
 'use strict';
 
+const APP_VERSION = '2026-09-20 (5)';
+
 /* ---------------- カテゴリ ---------------- */
 const CATS = [
   { key:'life',  name:'生活費' },
@@ -950,6 +952,7 @@ function openSettings() {
     <button type="button" class="btn-go" id="gsave">保存する</button>
     ${key ? '<button type="button" class="btn-del" data-act="key-clear">設定を消す</button>' : ''}
     <button type="button" class="btn-wide" data-act="close">閉じる</button>
+    <p class="bd-prev" style="margin:10px 0 0">アプリのバージョン ${APP_VERSION}</p>
   `);
   const input = $('gkey'), msg = $('gmsg'), save = $('gsave');
   save.addEventListener('click', async () => {
@@ -1243,6 +1246,33 @@ function runSplash() {
   requestAnimationFrame(tick);
 }
 
+/* ---------------- 新しいものが出たら受け取る ---------------- */
+function setupServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloading = false;
+
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading) return;
+    // 入力のとちゅうでは入れかえない
+    if (!el.sheet.hidden || !el.confirm.hidden) return;
+    reloading = true;
+    location.reload();
+  });
+
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register('./sw.js', { scope: './', updateViaCache: 'none' })
+      .then(reg => {
+        const check = () => { try { reg.update(); } catch (_) {} };
+        check();
+        setInterval(check, 30 * 60 * 1000);
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+      })
+      .catch(() => {});
+  });
+}
+
 /* ---------------- はじめる ---------------- */
 function init() {
   takeKeyFromUrl();
@@ -1289,11 +1319,7 @@ function init() {
   // 二本指の拡大や、ダブルタップでの拡大を止める
   document.addEventListener('gesturestart', e => e.preventDefault());
 
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => {});
-    });
-  }
+  setupServiceWorker();
 }
 
 init();
